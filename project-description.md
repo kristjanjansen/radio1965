@@ -315,9 +315,11 @@ rtmp {
             live on;
             record on;
             record all;
-            record_path /var/recordings;
+            record_path /var/recordings/video;
             record_unique on;
             record_suffix -%Y%m%d-%H%M%S.flv;
+            exec_publish /usr/local/bin/rtmp_on_publish.sh $app $name;
+            exec_record_done /usr/local/bin/rtmp_on_record_done.sh $path $app $name;
 
             # HLS väljund
             hls on;
@@ -329,29 +331,18 @@ rtmp {
 }
 ```
 
-TODO: make a script that converts  the recorded .flv and moves it to another server. Use in config:
-    exec_record_done /usr/local/bin/process-recording.sh $path;;
+`exec_publish` fires when a source starts publishing: `server/rtmp_on_publish.sh`
+publishes a `type="livestream"` event (same `POST /events/publish` the Icecast hooks
+below use for audio) with a `"<name> is live on 'video'"` notification, and persists
+the created event id to `/tmp/rtmp_event_<name>.id`.
 
-possibly:
-```
-#!/bin/bash
-# /usr/local/bin/process-recording.sh
-FILE="$1"
-BASENAME="${FILE%.*}"
-
-HAS_VIDEO=$(ffprobe -v error -select_streams v -show_entries stream=codec_type \
-  -of csv=p=0 "$FILE")
-
-if [ -z "$HAS_VIDEO" ]; then
-  # Audio-only stream → extract to MP3
-  ffmpeg -i "$FILE" -vn -c:a libmp3lame -b:a 192k "${BASENAME}.mp3"
-  rm "$FILE"
-else
-  # Has video → remux to MP4 (fast, no re-encode)
-  ffmpeg -i "$FILE" -c copy "${BASENAME}.mp4"
-  rm "$FILE"
-fi
-```
+`exec_record_done` fires once nginx-rtmp closes the recorded `.flv` (effectively at
+disconnect, since `record_unique` gives one file per connection) - that's `server/
+rtmp_on_record_done.sh`'s "stream ended" hook: it unpublishes the event immediately,
+then in the background converts the `.flv` (remux to `.mp4` if it has a video track,
+else extract to `.mp3`), moves it to `eccm.ee:/home/eccmee1/www/radio1965/streams/video/`,
+and finalizes the event into a playable `type="streamrecording"` - mirroring
+`icecast_on_disconnect.sh`'s audio flow (#8.2.1 below).
 
 
 ### 8.1 Audio streaming from Icecast
@@ -407,11 +398,11 @@ When save_stream is 1, start saving audio stream as mp3. Filename: combined fro 
 
 When stream is ended (and save_stream==1), close audio file
 
-### 8.2.2 Storing video sreams (nginx)
+### 8.2.2 Storing video streams (nginx)
 
-Saving locally should work already to flv.
-Convert video to mp4.
-Move to remote location (later)
+Recorded locally to .flv by nginx-rtmp's `record_path /var/recordings/video` (#8
+above). Conversion to .mp4 and the move to eccm.ee is handled by `server/
+rtmp_on_record_done.sh` via the `exec_record_done` hook - see #8 above.
 
 
 
