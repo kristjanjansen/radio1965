@@ -62,14 +62,24 @@
     table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
     th, td { border: 1px solid var(--field-border); padding: 0.3em; text-align: left; vertical-align: top; }
     th { background: var(--field-bg); }
-    td input, td select { width: 100%; min-width: 90px; }
+    td input, td select, td textarea { width: 100%; min-width: 90px; }
+    td textarea { resize: vertical; }
     td input[type="checkbox"] { width: auto; }
     tr.dirty > td { background: var(--dirty-bg); }
     tr.pending-delete > td { background: var(--delete-bg); }
+    .rowActions { display: flex; flex-direction: column; gap: 0.3em; white-space: nowrap; }
     .deleteBtn { background: var(--error); color: white; }
     .deleteBtn.marked { background: var(--field-bg); color: var(--fg); border: 1px solid var(--error); }
+    .undoBtn, .editBtn { background: var(--field-bg); color: var(--fg); border: 1px solid var(--field-border); padding: 0.3em 0.6em; font-size: 0.85em; }
     .recordingDeleteOption { display: block; font-weight: normal; font-size: 0.85em; margin-top: 0.3em; white-space: nowrap; }
     .readonly { opacity: 0.7; }
+
+    .modalOverlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
+    .modalBox { background: var(--bg); border: 1px solid var(--field-border); border-radius: 6px; padding: 1.5em; width: 90%; max-width: 600px; max-height: 85vh; overflow-y: auto; }
+    .modalBox label { display: block; margin-top: 1em; font-weight: bold; }
+    .modalBox input, .modalBox select, .modalBox textarea { width: 100%; margin-top: 0.3em; }
+    .modalBox textarea { resize: vertical; }
+    .modalActions { margin-top: 1.5em; display: flex; justify-content: flex-end; gap: 0.5em; }
   </style>
 </head>
 <body>
@@ -209,9 +219,19 @@
       //         patchUrl(id), deleteUrl(id) (optional), fetchRows() }
       const pendingEdits = new Map(); // id -> { field: value, ... }
       const pendingDeletes = new Map(); // id -> { deleteAudioFile: bool } | true
+      const rowElements = new Map(); // id -> { tr, actionsCell }
 
-      function cellControl(col, row) {
-        const value = row[col.field];
+      function currentValue(col, row) {
+        const edits = pendingEdits.get(row[opts.idField]);
+        return edits && col.field in edits ? edits[col.field] : row[col.field];
+      }
+
+      // Shared by both the (cramped) inline table cell and the edit popup
+      // below - same control, just rendered at a different size, so a
+      // value typed in either place behaves identically.
+      function buildFieldControl(col, row) {
+        const id = row[opts.idField];
+        const value = currentValue(col, row);
         const editable = opts.canEditRow(row) && !col.readonly;
         let el;
         if (col.type === "select") {
@@ -233,6 +253,10 @@
           // Event dates come back as ISO strings with seconds/offset -
           // datetime-local inputs want "YYYY-MM-DDTHH:MM".
           el.value = value ? String(value).slice(0, 16) : "";
+        } else if (col.multiline) {
+          el = document.createElement("textarea");
+          el.rows = 4;
+          el.value = value == null ? "" : value;
         } else {
           el = document.createElement("input");
           el.type = "text";
@@ -242,16 +266,195 @@
         if (!editable) el.classList.add("readonly");
 
         if (editable) {
-          const eventName = (col.type === "select" || col.type === "checkbox") ? "change" : "input";
-          el.addEventListener(eventName, () => {
+          const commitEventName = (col.type === "select" || col.type === "checkbox") ? "change" : "input";
+          el.addEventListener(commitEventName, () => {
             const newValue = col.type === "checkbox" ? el.checked : el.value;
-            if (!pendingEdits.has(row[opts.idField])) pendingEdits.set(row[opts.idField], {});
-            pendingEdits.get(row[opts.idField])[col.field] = newValue;
-            render();
-            updateApplyButton();
+            if (!pendingEdits.has(id)) pendingEdits.set(id, {});
+            pendingEdits.get(id)[col.field] = newValue;
+            // Deliberately NOT a full render() here - that would rebuild
+            // every cell in the table on every keystroke and steal focus
+            // right back out of the field being typed into (the original
+            // bug that made inline editing nearly unusable). Only the
+            // lightweight bits that need to react (dirty highlight, the
+            // Undo button) get touched instead.
+            markRowDirty(row);
           });
+          if (col.type !== "select" && col.type !== "checkbox") {
+            el.addEventListener("keydown", (e) => {
+              if (e.key !== "Escape") return;
+              e.preventDefault();
+              // Esc cancels only the field currently being edited, back to
+              // its last-saved (or last-staged) value - same convention
+              // spreadsheets/Beekeeper Studio use. It deliberately does
+              // NOT discard the rest of the row's pending edits or its
+              // delete-mark - reverting a whole row at once is the
+              // separate, more deliberate "Undo" button below.
+              const edits = pendingEdits.get(id);
+              if (edits && col.field in edits) {
+                delete edits[col.field];
+                if (Object.keys(edits).length === 0) pendingEdits.delete(id);
+              }
+              el.value = value == null ? "" : value;
+              el.blur();
+              markRowDirty(row);
+            });
+          }
         }
         return el;
+      }
+
+      function markRowDirty(row) {
+        const id = row[opts.idField];
+        const entry = rowElements.get(id);
+        if (!entry) return;
+        entry.tr.classList.toggle("dirty", pendingEdits.has(id));
+        refreshActionsCell(row);
+        updateApplyButton();
+      }
+
+      function refreshActionsCell(row) {
+        const id = row[opts.idField];
+        const entry = rowElements.get(id);
+        if (!entry) return;
+        entry.actionsCell.innerHTML = "";
+        entry.actionsCell.appendChild(buildActionsCell(row));
+      }
+
+      function buildActionsCell(row) {
+        const id = row[opts.idField];
+        const canEdit = opts.canEditRow(row);
+        const wrap = document.createElement("div");
+        wrap.className = "rowActions";
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "editBtn";
+        editBtn.textContent = "Edit...";
+        editBtn.disabled = !canEdit;
+        editBtn.addEventListener("click", () => openEditModal(row));
+        wrap.appendChild(editBtn);
+
+        if (pendingEdits.has(id)) {
+          const undoBtn = document.createElement("button");
+          undoBtn.type = "button";
+          undoBtn.className = "undoBtn";
+          undoBtn.textContent = "Undo edits";
+          undoBtn.addEventListener("click", () => {
+            pendingEdits.delete(id);
+            rebuildRow(row);
+            updateApplyButton();
+          });
+          wrap.appendChild(undoBtn);
+        }
+
+        if (opts.deleteUrl) {
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "deleteBtn" + (pendingDeletes.has(id) ? " marked" : "");
+          deleteBtn.textContent = pendingDeletes.has(id) ? "Undo delete" : "Delete";
+          deleteBtn.disabled = !canEdit;
+          deleteBtn.addEventListener("click", () => {
+            if (pendingDeletes.has(id)) {
+              pendingDeletes.delete(id);
+            } else {
+              pendingDeletes.set(id, { deleteAudioFile: false });
+            }
+            rebuildRow(row);
+            updateApplyButton();
+          });
+          wrap.appendChild(deleteBtn);
+
+          // Only shown once the row is actually marked for deletion - no
+          // point asking about the audio file before "Delete" was pressed.
+          if (pendingDeletes.has(id) && row.type === "streamrecording") {
+            const label = document.createElement("label");
+            label.className = "recordingDeleteOption";
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = pendingDeletes.get(id).deleteAudioFile;
+            checkbox.addEventListener("change", () => {
+              pendingDeletes.get(id).deleteAudioFile = checkbox.checked;
+            });
+            label.appendChild(checkbox);
+            label.appendChild(document.createTextNode(" also delete audio file"));
+            wrap.appendChild(label);
+          }
+        }
+
+        return wrap;
+      }
+
+      // Rebuilds one row's field cells + actions cell in place - used for
+      // discrete clicks (Undo, Delete toggle) where losing focus doesn't
+      // matter, as opposed to markRowDirty()'s lightweight path for
+      // keystroke-level edits.
+      function rebuildRow(row) {
+        const id = row[opts.idField];
+        const entry = rowElements.get(id);
+        if (!entry) return;
+        entry.tr.innerHTML = "";
+        populateRow(entry.tr, row, entry);
+      }
+
+      function populateRow(tr, row, entry) {
+        const id = row[opts.idField];
+        tr.classList.toggle("dirty", pendingEdits.has(id));
+        tr.classList.toggle("pending-delete", pendingDeletes.has(id));
+
+        for (const col of opts.columns) {
+          const td = document.createElement("td");
+          td.appendChild(buildFieldControl(col, row));
+          tr.appendChild(td);
+        }
+
+        const actionsTd = document.createElement("td");
+        actionsTd.appendChild(buildActionsCell(row));
+        tr.appendChild(actionsTd);
+        entry.actionsCell = actionsTd;
+      }
+
+      // --- Edit popup ---------------------------------------------------
+      // Same fields/controls as the inline row, just laid out full-width
+      // and with room to breathe - for title/summary/url in particular,
+      // the table cell is too narrow to comfortably type into.
+      function openEditModal(row) {
+        const overlay = document.createElement("div");
+        overlay.className = "modalOverlay";
+        const box = document.createElement("div");
+        box.className = "modalBox";
+        overlay.appendChild(box);
+
+        for (const col of opts.columns) {
+          if (col.readonly) continue;
+          const label = document.createElement("label");
+          label.textContent = col.label;
+          label.appendChild(buildFieldControl(col, row));
+          box.appendChild(label);
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "modalActions";
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.textContent = "Close";
+        closeBtn.addEventListener("click", () => {
+          overlay.remove();
+          rebuildRow(row); // reflect whatever was edited back into the table cells
+          markRowDirty(row);
+        });
+        actions.appendChild(closeBtn);
+        box.appendChild(actions);
+
+        overlay.addEventListener("keydown", (e) => {
+          // Escape here closes the whole popup (nothing to lose - every
+          // field commits to pendingEdits as you type, same as inline),
+          // not a single field - there's no "the one field being edited"
+          // concept once several fields are visible at once side by side.
+          if (e.key === "Escape") closeBtn.click();
+        });
+
+        document.body.appendChild(overlay);
+        box.querySelector("input, textarea, select")?.focus();
       }
 
       function render() {
@@ -261,7 +464,7 @@
           th.textContent = col.label;
           opts.headerRowEl.appendChild(th);
         }
-        if (opts.deleteUrl) opts.headerRowEl.appendChild(document.createElement("th"));
+        opts.headerRowEl.appendChild(document.createElement("th"));
 
         opts.filterBarEl.innerHTML = "";
         for (const col of opts.columns) {
@@ -319,56 +522,14 @@
 
       function renderBody() {
         opts.bodyEl.innerHTML = "";
+        rowElements.clear();
         for (const row of opts.rows) {
           if (!matchesFilters(row)) continue;
           const id = row[opts.idField];
           const tr = document.createElement("tr");
-          if (pendingEdits.has(id)) tr.classList.add("dirty");
-          if (pendingDeletes.has(id)) tr.classList.add("pending-delete");
-
-          for (const col of opts.columns) {
-            const td = document.createElement("td");
-            td.appendChild(cellControl(col, row));
-            tr.appendChild(td);
-          }
-
-          if (opts.deleteUrl) {
-            const td = document.createElement("td");
-            const canDelete = opts.canEditRow(row);
-            const btn = document.createElement("button");
-            btn.type = "button";
-            btn.className = "deleteBtn" + (pendingDeletes.has(id) ? " marked" : "");
-            btn.textContent = pendingDeletes.has(id) ? "Undo delete" : "Delete";
-            btn.disabled = !canDelete;
-            btn.addEventListener("click", () => {
-              if (pendingDeletes.has(id)) {
-                pendingDeletes.delete(id);
-              } else {
-                pendingDeletes.set(id, { deleteAudioFile: false });
-              }
-              render();
-              updateApplyButton();
-            });
-            td.appendChild(btn);
-
-            if (row.type === "streamrecording") {
-              const label = document.createElement("label");
-              label.className = "recordingDeleteOption";
-              const checkbox = document.createElement("input");
-              checkbox.type = "checkbox";
-              checkbox.disabled = !pendingDeletes.has(id);
-              checkbox.checked = pendingDeletes.has(id) && pendingDeletes.get(id).deleteAudioFile;
-              checkbox.addEventListener("change", () => {
-                if (pendingDeletes.has(id)) pendingDeletes.get(id).deleteAudioFile = checkbox.checked;
-              });
-              label.appendChild(checkbox);
-              label.appendChild(document.createTextNode(" also delete audio file"));
-              td.appendChild(label);
-            }
-
-            tr.appendChild(td);
-          }
-
+          const entry = { tr, actionsCell: null };
+          rowElements.set(id, entry);
+          populateRow(tr, row, entry);
           opts.bodyEl.appendChild(tr);
         }
       }
@@ -432,7 +593,7 @@
       { field: "id", label: "ID", readonly: true },
       { field: "type", label: "Type", type: "select", options: EVENT_TYPES },
       { field: "title", label: "Title" },
-      { field: "summary", label: "Summary" },
+      { field: "summary", label: "Summary", multiline: true },
       { field: "url", label: "URL" },
       { field: "status", label: "Status", type: "select", options: EVENT_STATUSES },
       { field: "publish_at", label: "Publish at", type: "datetime-local", noFilter: true },
