@@ -36,14 +36,13 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS events (
   id               VARCHAR(64) PRIMARY KEY,
-  type             ENUM('text','audio','video','audiostream','videostream','article','webcontent') NOT NULL,
+  type             ENUM('text','audio','video','article','webcontent','livestream','streamrecording') NOT NULL,
   title            VARCHAR(255) NOT NULL,
   summary          TEXT,
   url              VARCHAR(1024),
   publish_at       DATETIME NOT NULL,
   shelf_at         DATETIME NULL,
   status           ENUM('unpublished','new','shelved','archived') NOT NULL DEFAULT 'unpublished',
-  comments_enabled TINYINT(1) NOT NULL DEFAULT 0,
   payload          JSON NULL,
   -- Who posted this event - nullable, not yet populated by
   -- POST /events/publish (project-description.md #10.2/#10.3 - out of
@@ -107,3 +106,21 @@ CREATE TABLE IF NOT EXISTS tags (
 --     MODIFY COLUMN access_token VARCHAR(64) NULL,
 --     MODIFY COLUMN role ENUM('pending','contributor','manager','banned','deleted')
 --       NOT NULL DEFAULT 'pending';
+--
+-- Comments feature removed entirely (never had any UI consuming it) and
+-- the "audiostream"/"videostream" event types dropped (folded into
+-- Audio/Video everywhere they were used - see app/CollectionPage.qml) -
+-- on an already-deployed DB:
+--   -- First check nothing actually uses the two types being removed -
+--   -- MySQL would otherwise silently truncate those rows' `type` to ''
+--   -- when the ALTER below runs, which violates the NOT NULL constraint
+--   -- and fails the whole statement instead of quietly corrupting data,
+--   -- but it's still worth migrating any real rows by hand first (e.g.
+--   -- UPDATE events SET type='audio' WHERE type='audiostream'; and the
+--   -- 'video' equivalent) rather than discovering this failure blind:
+--   SELECT id, type FROM events WHERE type IN ('audiostream','videostream');
+--
+--   ALTER TABLE events DROP COLUMN comments_enabled;
+--   ALTER TABLE events MODIFY COLUMN type
+--     ENUM('text','audio','video','article','webcontent','livestream','streamrecording')
+--     NOT NULL;

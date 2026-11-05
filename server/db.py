@@ -9,7 +9,6 @@ from collections.abc import Generator
 
 from sqlalchemy import (
     JSON,
-    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -31,7 +30,7 @@ class Base(DeclarativeBase):
     pass
 
 
-EVENT_TYPES = ("text", "audio", "video", "audiostream", "videostream", "article", "webcontent", "livestream", "streamrecording")
+EVENT_TYPES = ("text", "audio", "video", "article", "webcontent", "livestream", "streamrecording")
 EVENT_STATUSES = ("unpublished", "new", "shelved", "archived")
 # "none" (no row) isn't a stored value - it's what GET /contributors/status
 # (main.py) returns when a token isn't found at all. "deleted" is set by
@@ -54,7 +53,6 @@ class Event(Base):
     status: Mapped[str] = mapped_column(
         Enum(*EVENT_STATUSES, name="event_status"), nullable=False, default="unpublished"
     )
-    comments_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Who posted this event - nullable. Populated by POST /events/publish
     # (server/main.py's publish_event()) from whichever access_token the
@@ -84,7 +82,6 @@ class Event(Base):
             "publish_at": self.publish_at.isoformat(),
             "shelf_at": self.shelf_at.isoformat() if self.shelf_at else None,
             "status": self.status,
-            "comments_enabled": self.comments_enabled,
             "tags": [t.tag for t in self.tags],
             "payload": self.payload or {},
             "author_id": self.author_id,

@@ -28,15 +28,13 @@ Page {
 
     background: Rectangle { color: "transparent" }
 
-    // Folds server/db.py's 9 EVENT_TYPES into project-description.md's 6
-    // shelves plus "Stream Recordings" - audiostream/videostream (no
-    // dedicated shelf in the doc) fold into Audio/Video as the closest
-    // semantic match. "streamrecording" (a finished "Save stream" livestream
-    // recording, see server/icecast_on_disconnect.sh's finalize-recording
-    // call) gets its own shelf rather than folding into "Audio", so it stays
-    // visually distinct from readymade/uploaded audio content. Colors are a
-    // simple hue-per-shelf scheme suited to the app's existing dark
-    // background (Main.qml's Material.background gradient).
+    // Folds server/db.py's EVENT_TYPES into project-description.md's 6
+    // shelves plus "Stream Recordings". "streamrecording" (a finished "Save
+    // stream" livestream recording, see server/icecast_on_disconnect.sh's
+    // finalize-recording call) gets its own shelf rather than folding into
+    // "Audio", so it stays visually distinct from readymade/uploaded audio
+    // content. Colors are a simple hue-per-shelf scheme suited to the app's
+    // existing dark background (Main.qml's Material.background gradient).
     //
     // Deliberately no "livestream" shelf: an in-progress broadcast isn't a
     // collectible item (it's covered live via "New Arrivals"/the "LIVE"
@@ -47,8 +45,8 @@ Page {
         { types: ["article"], title: qsTr("Article"), color: "#4a3416" },
         { types: ["webcontent"], title: qsTr("Web Content"), color: "#16403c" },
         { types: ["text"], title: qsTr("Message"), color: "#2c4a16" },
-        { types: ["audio", "audiostream"], title: qsTr("Audio"), color: "#16304a" },
-        { types: ["video", "videostream"], title: qsTr("Video"), color: "#2a1a4a" },
+        { types: ["audio"], title: qsTr("Audio"), color: "#16304a" },
+        { types: ["video"], title: qsTr("Video"), color: "#2a1a4a" },
         { types: ["streamrecording"], title: qsTr("Stream Recordings"), color: "#3a2a4a" }
     ]
 

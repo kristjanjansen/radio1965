@@ -177,7 +177,6 @@ def joomla_article_to_event(item: dict, tag_cache: dict) -> dict:
         "url": attrs.get("link") or f"https://eccm.ee/index.php?option=com_content&id={article_id}",
         "publish_at": publish_at,
         "shelf_at": shelf_at,
-        "comments_enabled": False,
         "payload": {"article_id": int(article_id)},
         "tags": tags,
     }

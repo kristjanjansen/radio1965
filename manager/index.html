@@ -61,7 +61,7 @@
 
     table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
     th, td { border: 1px solid var(--field-border); padding: 0.3em; text-align: left; vertical-align: top; }
-    th { background: var(--field-bg); position: sticky; top: 3em; }
+    th { background: var(--field-bg); }
     td input, td select { width: 100%; min-width: 90px; }
     td input[type="checkbox"] { width: auto; }
     tr.dirty > td { background: var(--dirty-bg); }
@@ -138,7 +138,7 @@
 
     // Mirrors server/db.py's EVENT_TYPES/EVENT_STATUSES/USER_ROLES - kept
     // in sync by hand, same as editor/index.html's #type <select> options.
-    const EVENT_TYPES = ["text", "audio", "video", "audiostream", "videostream", "article", "webcontent", "livestream", "streamrecording"];
+    const EVENT_TYPES = ["text", "audio", "video", "article", "webcontent", "livestream", "streamrecording"];
     const EVENT_STATUSES = ["unpublished", "new", "shelved", "archived"];
     const USER_ROLES = ["pending", "contributor", "manager", "banned", "deleted"];
 
@@ -265,6 +265,7 @@
 
         opts.filterBarEl.innerHTML = "";
         for (const col of opts.columns) {
+          if (col.noFilter) continue;
           let filterEl;
           if (col.type === "select") {
             filterEl = document.createElement("select");
@@ -287,6 +288,16 @@
           filterEl.addEventListener("change", renderBody);
           opts.filterBarEl.appendChild(filterEl);
         }
+
+        const resetButton = document.createElement("button");
+        resetButton.type = "button";
+        resetButton.className = "secondary";
+        resetButton.textContent = "Reset filters";
+        resetButton.addEventListener("click", () => {
+          for (const el of opts.filterBarEl.querySelectorAll("[data-field]")) el.value = "";
+          renderBody();
+        });
+        opts.filterBarEl.appendChild(resetButton);
 
         renderBody();
       }
@@ -424,11 +435,10 @@
       { field: "summary", label: "Summary" },
       { field: "url", label: "URL" },
       { field: "status", label: "Status", type: "select", options: EVENT_STATUSES },
-      { field: "publish_at", label: "Publish at", type: "datetime-local" },
-      { field: "shelf_at", label: "Shelf at", type: "datetime-local" },
-      { field: "comments_enabled", label: "Comments", type: "checkbox" },
+      { field: "publish_at", label: "Publish at", type: "datetime-local", noFilter: true },
+      { field: "shelf_at", label: "Shelf at", type: "datetime-local", noFilter: true },
       { field: "author_id", label: "Author ID", readonly: true },
-      { field: "created_at", label: "Created", readonly: true },
+      { field: "created_at", label: "Created", readonly: true, noFilter: true },
     ];
 
     let eventsGrid = null;
@@ -467,7 +477,7 @@
       { field: "name", label: "Name", readonly: true },
       { field: "email", label: "Email", readonly: true },
       { field: "role", label: "Role", type: "select", options: USER_ROLES },
-      { field: "created_at", label: "Created", readonly: true },
+      { field: "created_at", label: "Created", readonly: true, noFilter: true },
     ];
 
     let usersGrid = null;

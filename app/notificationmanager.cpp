@@ -18,7 +18,6 @@ EventItem eventItemFromJson(const QJsonObject &event)
     item.publishAt = event.value("publish_at").toString();
     item.shelfAt = event.value("shelf_at").toString();
     item.status = event.value("status").toString();
-    item.commentsEnabled = event.value("comments_enabled").toBool();
     item.authorName = event.value("author_name").toString();
 
     for (const QJsonValue &tag : event.value("tags").toArray())
@@ -76,8 +75,6 @@ QVariant NotificationManager::data(const QModelIndex &index, int role) const
         return event.tags;
     case PayloadRole:
         return event.payload;
-    case CommentsEnabledRole:
-        return event.commentsEnabled;
     case AuthorNameRole:
         return event.authorName;
     default:
@@ -105,7 +102,6 @@ QHash<int, QByteArray> NotificationManager::roleNames() const
         { StatusRole, "status" },
         { TagsRole, "tags" },
         { PayloadRole, "payload" },
-        { CommentsEnabledRole, "commentsEnabled" },
         { AuthorNameRole, "authorName" }
     };
 }
@@ -201,7 +197,6 @@ QVariantMap eventItemToMap(const EventItem &item)
         { "status", item.status },
         { "tags", tags },
         { "payload", item.payload },
-        { "commentsEnabled", item.commentsEnabled },
         { "authorName", item.authorName }
     };
 }

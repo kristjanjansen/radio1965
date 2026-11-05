@@ -213,7 +213,6 @@ class EventIn(BaseModel):
     shelf_at: str | None = None
     tags: list[str] = Field(default_factory=list)
     payload: dict = Field(default_factory=dict)
-    comments_enabled: bool = False
     # Opt out of the push while still publishing/listing the event - used by
     # server/icecast_on_connect.sh, forwarding BroadcastPage.qml's "Send
     # notification" checkbox (see IcecastBroadcaster::startBroadcast()).
@@ -239,7 +238,6 @@ class EventPatchIn(BaseModel):
     status: str | None = None
     publish_at: str | None = None
     shelf_at: str | None = None
-    comments_enabled: bool | None = None
 
 
 # manager/index.html - partial edit of an existing user. Role is the only
@@ -601,7 +599,6 @@ def publish_event(event: EventIn, session: Session = Depends(db.get_db)):
         publish_at=publish_at,
         shelf_at=shelf_at,
         status=status,
-        comments_enabled=event.comments_enabled,
         payload=payload,
         tags=[db.Tag(tag=tag) for tag in event.tags],
         author_id=author.id if author else None,
@@ -728,8 +725,6 @@ def update_event(event_id: str, body: EventPatchIn, session: Session = Depends(d
         row.publish_at = _parse_datetime(body.publish_at)
     if body.shelf_at is not None:
         row.shelf_at = _parse_datetime(body.shelf_at)
-    if body.comments_enabled is not None:
-        row.comments_enabled = body.comments_enabled
 
     session.commit()
     session.refresh(row)

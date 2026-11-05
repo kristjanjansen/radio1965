@@ -18,7 +18,6 @@ struct EventItem
     QString status;
     QStringList tags;
     QVariantMap payload;
-    bool commentsEnabled = false;
     // "Shared by: <name>" on Collection/search cards (project-description.md
     // #10) - empty when the event has no author (nothing published it via
     // a logged-in contributor, or predates this feature).
@@ -50,7 +49,6 @@ public:
         StatusRole,
         TagsRole,
         PayloadRole,
-        CommentsEnabledRole,
         AuthorNameRole
     };
 
