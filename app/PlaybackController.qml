@@ -20,6 +20,12 @@ QtObject {
     // app/icecastbroadcaster.cpp) plays that instead, per start().
     readonly property string liveStreamUrl: "https://live.uuu.ee:4443/hls/stream.m3u8"
 
+    // radio1965's public listen URL - moved off the Icecast box (behind
+    // live.uuu.ee:8001, where status-json.xsl can see it) to this relay, so
+    // its own occupancy can't come from status-json.xsl either - checked
+    // separately below, same as liveStreamUrl/videoStreamLive.
+    readonly property string radio1965StreamUrl: "https://v2in.stream/stream/radio1965"
+
     // Fixed mount list, same as BroadcastPage.qml's channelNames (plus
     // "live", listenable by everyone even though only managers can
     // broadcast to it - see BroadcastPage.qml's isManager gate), plus
@@ -39,23 +45,54 @@ QtObject {
     // occupancy can't come from status-json.xsl - checked separately below
     // via a plain GET against liveStreamUrl itself.
     property bool videoStreamLive: false
+    // Same reasoning as videoStreamLive, now that radio1965 is no longer an
+    // Icecast mountpoint reachable via status-json.xsl either.
+    property bool radio1965StreamLive: false
+
+    function _checkStreamLive(url, callback) {
+        // Resolve as soon as headers arrive, not on DONE - a live
+        // stream's body never ends on its own (confirmed via `curl -v
+        // --max-time 5`: headers land instantly, body just keeps
+        // streaming until the connection is forcibly cut), so waiting
+        // for DONE here would hang forever instead of ever reporting
+        // "live". abort() once the status is known so this doesn't sit
+        // there quietly downloading live audio/video in the background -
+        // deferred to the next event-loop tick via a one-shot Timer
+        // rather than called inline, since calling xhr.abort()
+        // synchronously from inside this same onreadystatechange handler
+        // crashes (QIODevice::readAll() re-entering while Qt's network
+        // reply machinery is still processing the very signal that
+        // triggered this callback).
+        const xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState === XMLHttpRequest.HEADERS_RECEIVED) {
+                callback(xhr.status >= 200 && xhr.status < 300);
+                const abortTimer = Qt.createQmlObject(
+                    "import QtQuick; Timer { interval: 0; running: true }", root);
+                abortTimer.triggered.connect(function () {
+                    xhr.abort();
+                    abortTimer.destroy();
+                });
+            }
+        };
+        xhr.open("GET", url);
+        xhr.send();
+    }
 
     function refreshChannelAvailability() {
         if (root.occupancyAvailable)
             icecastBroadcaster.refreshOccupiedChannels();
 
-        const xhr = new XMLHttpRequest();
-        xhr.onreadystatechange = function () {
-            if (xhr.readyState === XMLHttpRequest.DONE)
-                root.videoStreamLive = (xhr.status >= 200 && xhr.status < 300);
-        };
-        xhr.open("GET", root.liveStreamUrl);
-        xhr.send();
+        root._checkStreamLive(root.liveStreamUrl, function (live) { root.videoStreamLive = live; });
+        root._checkStreamLive(root.radio1965StreamUrl, function (live) { root.radio1965StreamLive = live; });
     }
 
     function isChannelStreaming(channel) {
-        return channel === "video" ? root.videoStreamLive
-                                    : root.occupiedChannels.indexOf(channel) !== -1;
+        if (channel === "video")
+            return root.videoStreamLive;
+        if (channel === "radio1965")
+            return root.radio1965StreamLive;
+        return root.occupiedChannels.indexOf(channel) !== -1;
     }
 
     property Connections _occupancyConnections: Connections {
