@@ -579,7 +579,11 @@
         opts.statusEl.textContent = failures > 0
           ? `Done, ${failures} change(s) failed - see console.`
           : "All changes applied.";
-        render();
+        // Re-fetch from the server rather than just re-rendering the
+        // now-stale in-memory rows - picks up anything another manager
+        // changed in the meantime, not just this tab's own edits.
+        if (opts.reload) await opts.reload();
+        else render();
         updateApplyButton();
       }
 
@@ -626,6 +630,7 @@
           statusEl: document.getElementById("eventsApplyStatus"),
           patchUrl: (id) => `${serverUrl()}/events/${id}`,
           deleteUrl: (id) => `${serverUrl()}/events/${id}`,
+          reload: loadEvents,
         });
       }
     }
@@ -664,6 +669,7 @@
           statusEl: document.getElementById("usersApplyStatus"),
           patchUrl: (id) => `${serverUrl()}/users/${id}`,
           // No deleteUrl - deleting users isn't part of this page.
+          reload: loadUsers,
         });
       }
     }
