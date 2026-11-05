@@ -179,7 +179,11 @@ QtObject {
     }
 
     function channelUrl(channel) {
-        return channel === "video" ? root.liveStreamUrl : ("http://live.uuu.ee:8001/" + channel);
+        if (channel === "video")
+            return root.liveStreamUrl;
+        if (channel === "radio1965")
+            return "https://v2in.stream/stream/radio1965";
+        return "http://live.uuu.ee:8001/" + channel;
     }
 
     // Called by PlayerBar's channel ComboBox onActivated (a real user pick,
