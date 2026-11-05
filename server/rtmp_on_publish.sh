@@ -24,12 +24,9 @@ log() { echo "$(date -Is) [on-publish] $*" >> "$LOGFILE"; }
 
 log "invoked: app='$1' channel='$CHANNEL'"
 
-# RTMP carries no free-text title field the way Icecast's ice-name header
-# does (set by the broadcaster app) - the stream key is the only thing
-# identifying this broadcast, so it doubles as the title.
 BODY=$(jq -n \
   --arg ch "$CHANNEL" \
-  --arg title "$CHANNEL is live on 'video'" \
+  --arg title "Video stream is on air" \
   '{
     type: "livestream",
     title: $title,

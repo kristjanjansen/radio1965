@@ -333,7 +333,7 @@ rtmp {
 
 `exec_publish` fires when a source starts publishing: `server/rtmp_on_publish.sh`
 publishes a `type="livestream"` event (same `POST /events/publish` the Icecast hooks
-below use for audio) with a `"<name> is live on 'video'"` notification, and persists
+below use for audio) with a "Video stream is on air" notification, and persists
 the created event id to `/tmp/rtmp_event_<name>.id`.
 
 `exec_record_done` fires once nginx-rtmp closes the recorded `.flv` (effectively at
