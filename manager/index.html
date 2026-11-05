@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Radio 1965 - Manager</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #12100d;
+      --fg: #f0e6d2;
+      --accent: #42b649;
+      --error: crimson;
+      --field-bg: #201d18;
+      --field-border: #3a362e;
+      --dirty-bg: #2e4a1f;
+      --delete-bg: #4a1f1f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      margin: 2em auto;
+      padding: 0 1em;
+      max-width: 1400px;
+    }
+    label { display: block; margin-top: 1em; font-weight: bold; }
+    input, textarea, select {
+      font-size: 1em;
+      padding: 0.4em;
+      background: var(--field-bg);
+      border: 1px solid var(--field-border);
+      border-radius: 4px;
+      color: var(--fg);
+    }
+    input[type="checkbox"] { width: auto; }
+    button {
+      padding: 0.5em 1em;
+      background: var(--accent);
+      color: #0a1a0b;
+      border: none;
+      border-radius: 4px;
+      font-size: 1em;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button.secondary { background: var(--field-bg); color: var(--fg); border: 1px solid var(--field-border); }
+    #lockScreen { max-width: 320px; margin: 4em auto; text-align: center; }
+    #lockError { color: var(--error); min-height: 1.2em; }
+
+    .tabs { display: flex; gap: 0.5em; margin-bottom: 1em; }
+    .tabs button.active { outline: 2px solid var(--fg); }
+
+    .filterBar { display: flex; flex-wrap: wrap; gap: 0.5em; margin-bottom: 0.5em; }
+    .filterBar input, .filterBar select { width: 160px; }
+
+    .applyBar { display: flex; align-items: center; gap: 1em; margin-bottom: 1em; position: sticky; top: 0; background: var(--bg); padding: 0.5em 0; z-index: 1; }
+    #applyStatus { opacity: 0.8; }
+
+    table { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+    th, td { border: 1px solid var(--field-border); padding: 0.3em; text-align: left; vertical-align: top; }
+    th { background: var(--field-bg); position: sticky; top: 3em; }
+    td input, td select { width: 100%; min-width: 90px; }
+    td input[type="checkbox"] { width: auto; }
+    tr.dirty > td { background: var(--dirty-bg); }
+    tr.pending-delete > td { background: var(--delete-bg); }
+    .deleteBtn { background: var(--error); color: white; }
+    .deleteBtn.marked { background: var(--field-bg); color: var(--fg); border: 1px solid var(--error); }
+    .recordingDeleteOption { display: block; font-weight: normal; font-size: 0.85em; margin-top: 0.3em; white-space: nowrap; }
+    .readonly { opacity: 0.7; }
+  </style>
+</head>
+<body>
+  <!-- project-description.md #11's Manager page - same server-side login
+       (POST /contributors/login) and sessionStorage-session pattern as
+       editor/index.html, kept deliberately close to it for consistency. -->
+  <div id="lockScreen">
+    <h1>Radio 1965 - Manager</h1>
+    <label>Email
+      <input id="lockEmail" type="email" autofocus />
+    </label>
+    <label>Password
+      <input id="lockPassword" type="password" />
+    </label>
+    <div id="lockError"></div>
+    <button id="unlockButton" type="button">Log in</button>
+  </div>
+
+  <div id="appContent" style="display: none">
+    <h1>VÄIN - Manager</h1>
+
+    <div class="tabs">
+      <button id="eventsTabButton" class="active" type="button">Events</button>
+      <button id="usersTabButton" type="button" style="display: none">Users</button>
+    </div>
+
+    <div id="eventsTab">
+      <div class="applyBar">
+        <button id="eventsApplyButton" type="button" disabled>Apply changes</button>
+        <button id="eventsReloadButton" class="secondary" type="button">Reload</button>
+        <span id="eventsApplyStatus"></span>
+      </div>
+
+      <div class="filterBar" id="eventsFilterBar"></div>
+
+      <div style="overflow-x: auto">
+        <table id="eventsTable">
+          <thead><tr id="eventsHeaderRow"></tr></thead>
+          <tbody id="eventsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="usersTab" style="display: none">
+      <div class="applyBar">
+        <button id="usersApplyButton" type="button" disabled>Apply changes</button>
+        <button id="usersReloadButton" class="secondary" type="button">Reload</button>
+        <span id="usersApplyStatus"></span>
+      </div>
+
+      <div class="filterBar" id="usersFilterBar"></div>
+
+      <table id="usersTable">
+        <thead><tr id="usersHeaderRow"></tr></thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const SERVER_URL = "https://live.uuu.ee/radio1965/api";
+    const ACCESS_TOKEN_SESSION_KEY = "radio65ManagerAccessToken";
+    const ROLE_SESSION_KEY = "radio65ManagerRole";
+    const USER_ID_SESSION_KEY = "radio65ManagerUserId";
+    const APPROVED_ROLES = ["contributor", "manager"];
+
+    // Mirrors server/db.py's EVENT_TYPES/EVENT_STATUSES/USER_ROLES - kept
+    // in sync by hand, same as editor/index.html's #type <select> options.
+    const EVENT_TYPES = ["text", "audio", "video", "audiostream", "videostream", "article", "webcontent", "livestream", "streamrecording"];
+    const EVENT_STATUSES = ["unpublished", "new", "shelved", "archived"];
+    const USER_ROLES = ["pending", "contributor", "manager", "banned", "deleted"];
+
+    function serverUrl() { return SERVER_URL; }
+
+    function unlockManager() {
+      document.getElementById("lockScreen").style.display = "none";
+      document.getElementById("appContent").style.display = "";
+    }
+
+    function rejectAccess(errorEl, message) {
+      sessionStorage.removeItem(ACCESS_TOKEN_SESSION_KEY);
+      sessionStorage.removeItem(ROLE_SESSION_KEY);
+      sessionStorage.removeItem(USER_ID_SESSION_KEY);
+      errorEl.textContent = message;
+    }
+
+    async function tryLogin() {
+      const emailEl = document.getElementById("lockEmail");
+      const passwordEl = document.getElementById("lockPassword");
+      const errorEl = document.getElementById("lockError");
+      errorEl.textContent = "";
+      try {
+        const res = await fetch(`${serverUrl()}/contributors/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: emailEl.value, password: passwordEl.value }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          rejectAccess(errorEl, "Invalid email or password.");
+        } else if (res.status === 403) {
+          rejectAccess(errorEl, "This account cannot access the manager page.");
+        } else if (!res.ok) {
+          rejectAccess(errorEl, "Could not reach the server. Try again later.");
+        } else if (!APPROVED_ROLES.includes(data.role)) {
+          rejectAccess(errorEl, "Only contributors/managers can use this page.");
+        } else {
+          sessionStorage.setItem(ACCESS_TOKEN_SESSION_KEY, data.access_token);
+          sessionStorage.setItem(ROLE_SESSION_KEY, data.role);
+          sessionStorage.setItem(USER_ID_SESSION_KEY, String(data.id));
+          unlockManager();
+          initApp();
+        }
+      } catch (err) {
+        rejectAccess(errorEl, "Could not reach the server. Try again later.");
+      }
+      passwordEl.value = "";
+    }
+
+    document.getElementById("unlockButton").addEventListener("click", tryLogin);
+    document.getElementById("lockPassword").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") tryLogin();
+    });
+
+    function accessToken() { return sessionStorage.getItem(ACCESS_TOKEN_SESSION_KEY); }
+    function currentRole() { return sessionStorage.getItem(ROLE_SESSION_KEY); }
+    function currentUserId() { return Number(sessionStorage.getItem(USER_ID_SESSION_KEY)); }
+
+    // --- Generic grid helper -------------------------------------------
+    // Both the Events and Users tabs share the same dirty-row/pending-
+    // delete/Apply/filter shape, just with a different column list and
+    // endpoint - factored into one small "grid" object per tab instead of
+    // duplicating the logic twice.
+    function createGrid(opts) {
+      // opts: { columns, rows: [], idField, canEditRow(row), bodyEl,
+      //         headerRowEl, filterBarEl, applyButtonEl, statusEl,
+      //         patchUrl(id), deleteUrl(id) (optional), fetchRows() }
+      const pendingEdits = new Map(); // id -> { field: value, ... }
+      const pendingDeletes = new Map(); // id -> { deleteAudioFile: bool } | true
+
+      function cellControl(col, row) {
+        const value = row[col.field];
+        const editable = opts.canEditRow(row) && !col.readonly;
+        let el;
+        if (col.type === "select") {
+          el = document.createElement("select");
+          for (const option of col.options) {
+            const optionEl = document.createElement("option");
+            optionEl.value = option;
+            optionEl.textContent = option;
+            if (option === value) optionEl.selected = true;
+            el.appendChild(optionEl);
+          }
+        } else if (col.type === "checkbox") {
+          el = document.createElement("input");
+          el.type = "checkbox";
+          el.checked = !!value;
+        } else if (col.type === "datetime-local") {
+          el = document.createElement("input");
+          el.type = "datetime-local";
+          // Event dates come back as ISO strings with seconds/offset -
+          // datetime-local inputs want "YYYY-MM-DDTHH:MM".
+          el.value = value ? String(value).slice(0, 16) : "";
+        } else {
+          el = document.createElement("input");
+          el.type = "text";
+          el.value = value == null ? "" : value;
+        }
+        el.disabled = !editable;
+        if (!editable) el.classList.add("readonly");
+
+        if (editable) {
+          const eventName = (col.type === "select" || col.type === "checkbox") ? "change" : "input";
+          el.addEventListener(eventName, () => {
+            const newValue = col.type === "checkbox" ? el.checked : el.value;
+            if (!pendingEdits.has(row[opts.idField])) pendingEdits.set(row[opts.idField], {});
+            pendingEdits.get(row[opts.idField])[col.field] = newValue;
+            render();
+            updateApplyButton();
+          });
+        }
+        return el;
+      }
+
+      function render() {
+        opts.headerRowEl.innerHTML = "";
+        for (const col of opts.columns) {
+          const th = document.createElement("th");
+          th.textContent = col.label;
+          opts.headerRowEl.appendChild(th);
+        }
+        if (opts.deleteUrl) opts.headerRowEl.appendChild(document.createElement("th"));
+
+        opts.filterBarEl.innerHTML = "";
+        for (const col of opts.columns) {
+          let filterEl;
+          if (col.type === "select") {
+            filterEl = document.createElement("select");
+            const anyOption = document.createElement("option");
+            anyOption.value = "";
+            anyOption.textContent = `${col.label}: any`;
+            filterEl.appendChild(anyOption);
+            for (const option of col.options) {
+              const optionEl = document.createElement("option");
+              optionEl.value = option;
+              optionEl.textContent = option;
+              filterEl.appendChild(optionEl);
+            }
+          } else {
+            filterEl = document.createElement("input");
+            filterEl.placeholder = `Filter ${col.label}`;
+          }
+          filterEl.dataset.field = col.field;
+          filterEl.addEventListener("input", renderBody);
+          filterEl.addEventListener("change", renderBody);
+          opts.filterBarEl.appendChild(filterEl);
+        }
+
+        renderBody();
+      }
+
+      function matchesFilters(row) {
+        const filterEls = opts.filterBarEl.querySelectorAll("[data-field]");
+        for (const filterEl of filterEls) {
+          const value = filterEl.value;
+          if (!value) continue;
+          const rowValue = row[filterEl.dataset.field];
+          if (filterEl.tagName === "SELECT") {
+            if (rowValue !== value) return false;
+          } else if (!String(rowValue == null ? "" : rowValue).toLowerCase().includes(value.toLowerCase())) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      function renderBody() {
+        opts.bodyEl.innerHTML = "";
+        for (const row of opts.rows) {
+          if (!matchesFilters(row)) continue;
+          const id = row[opts.idField];
+          const tr = document.createElement("tr");
+          if (pendingEdits.has(id)) tr.classList.add("dirty");
+          if (pendingDeletes.has(id)) tr.classList.add("pending-delete");
+
+          for (const col of opts.columns) {
+            const td = document.createElement("td");
+            td.appendChild(cellControl(col, row));
+            tr.appendChild(td);
+          }
+
+          if (opts.deleteUrl) {
+            const td = document.createElement("td");
+            const canDelete = opts.canEditRow(row);
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "deleteBtn" + (pendingDeletes.has(id) ? " marked" : "");
+            btn.textContent = pendingDeletes.has(id) ? "Undo delete" : "Delete";
+            btn.disabled = !canDelete;
+            btn.addEventListener("click", () => {
+              if (pendingDeletes.has(id)) {
+                pendingDeletes.delete(id);
+              } else {
+                pendingDeletes.set(id, { deleteAudioFile: false });
+              }
+              render();
+              updateApplyButton();
+            });
+            td.appendChild(btn);
+
+            if (row.type === "streamrecording") {
+              const label = document.createElement("label");
+              label.className = "recordingDeleteOption";
+              const checkbox = document.createElement("input");
+              checkbox.type = "checkbox";
+              checkbox.disabled = !pendingDeletes.has(id);
+              checkbox.checked = pendingDeletes.has(id) && pendingDeletes.get(id).deleteAudioFile;
+              checkbox.addEventListener("change", () => {
+                if (pendingDeletes.has(id)) pendingDeletes.get(id).deleteAudioFile = checkbox.checked;
+              });
+              label.appendChild(checkbox);
+              label.appendChild(document.createTextNode(" also delete audio file"));
+              td.appendChild(label);
+            }
+
+            tr.appendChild(td);
+          }
+
+          opts.bodyEl.appendChild(tr);
+        }
+      }
+
+      function updateApplyButton() {
+        opts.applyButtonEl.disabled = pendingEdits.size === 0 && pendingDeletes.size === 0;
+      }
+
+      async function apply() {
+        opts.applyButtonEl.disabled = true;
+        opts.statusEl.textContent = "Applying...";
+        let failures = 0;
+
+        for (const [id, fields] of pendingEdits) {
+          try {
+            const res = await fetch(opts.patchUrl(id), {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ access_token: accessToken(), ...fields }),
+            });
+            if (!res.ok) throw new Error(await res.text());
+            pendingEdits.delete(id);
+          } catch (err) {
+            failures += 1;
+            console.error(`Failed to update ${opts.idField}=${id}:`, err);
+          }
+        }
+
+        if (opts.deleteUrl) {
+          for (const [id, info] of pendingDeletes) {
+            try {
+              const qs = new URLSearchParams({
+                access_token: accessToken(),
+                delete_audio_file: info.deleteAudioFile ? "true" : "false",
+              });
+              const res = await fetch(`${opts.deleteUrl(id)}?${qs}`, { method: "DELETE" });
+              if (!res.ok) throw new Error(await res.text());
+              pendingDeletes.delete(id);
+              opts.rows = opts.rows.filter((row) => row[opts.idField] !== id);
+            } catch (err) {
+              failures += 1;
+              console.error(`Failed to delete ${opts.idField}=${id}:`, err);
+            }
+          }
+        }
+
+        opts.statusEl.textContent = failures > 0
+          ? `Done, ${failures} change(s) failed - see console.`
+          : "All changes applied.";
+        render();
+        updateApplyButton();
+      }
+
+      opts.applyButtonEl.addEventListener("click", apply);
+      render();
+      return { render, setRows: (rows) => { opts.rows = rows; render(); } };
+    }
+
+    // --- Events tab -------------------------------------------------------
+    const eventsColumns = [
+      { field: "id", label: "ID", readonly: true },
+      { field: "type", label: "Type", type: "select", options: EVENT_TYPES },
+      { field: "title", label: "Title" },
+      { field: "summary", label: "Summary" },
+      { field: "url", label: "URL" },
+      { field: "status", label: "Status", type: "select", options: EVENT_STATUSES },
+      { field: "publish_at", label: "Publish at", type: "datetime-local" },
+      { field: "shelf_at", label: "Shelf at", type: "datetime-local" },
+      { field: "comments_enabled", label: "Comments", type: "checkbox" },
+      { field: "author_id", label: "Author ID", readonly: true },
+      { field: "created_at", label: "Created", readonly: true },
+    ];
+
+    let eventsGrid = null;
+
+    async function loadEvents() {
+      const qs = new URLSearchParams();
+      for (const status of ["new", "shelved", "unpublished", "archived"]) qs.append("status", status);
+      qs.set("limit", "2000");
+      const res = await fetch(`${serverUrl()}/events?${qs}`);
+      const data = await res.json();
+      const rows = data.events || [];
+      if (eventsGrid) {
+        eventsGrid.setRows(rows);
+      } else {
+        eventsGrid = createGrid({
+          columns: eventsColumns,
+          rows,
+          idField: "id",
+          canEditRow: (row) => currentRole() === "manager" || row.author_id === currentUserId(),
+          bodyEl: document.getElementById("eventsBody"),
+          headerRowEl: document.getElementById("eventsHeaderRow"),
+          filterBarEl: document.getElementById("eventsFilterBar"),
+          applyButtonEl: document.getElementById("eventsApplyButton"),
+          statusEl: document.getElementById("eventsApplyStatus"),
+          patchUrl: (id) => `${serverUrl()}/events/${id}`,
+          deleteUrl: (id) => `${serverUrl()}/events/${id}`,
+        });
+      }
+    }
+
+    document.getElementById("eventsReloadButton").addEventListener("click", loadEvents);
+
+    // --- Users tab (manager only) -----------------------------------------
+    const usersColumns = [
+      { field: "id", label: "ID", readonly: true },
+      { field: "name", label: "Name", readonly: true },
+      { field: "email", label: "Email", readonly: true },
+      { field: "role", label: "Role", type: "select", options: USER_ROLES },
+      { field: "created_at", label: "Created", readonly: true },
+    ];
+
+    let usersGrid = null;
+
+    async function loadUsers() {
+      const qs = new URLSearchParams({ access_token: accessToken() });
+      const res = await fetch(`${serverUrl()}/users?${qs}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const rows = data.users || [];
+      if (usersGrid) {
+        usersGrid.setRows(rows);
+      } else {
+        usersGrid = createGrid({
+          columns: usersColumns,
+          rows,
+          idField: "id",
+          canEditRow: () => true, // this whole tab is manager-only already
+          bodyEl: document.getElementById("usersBody"),
+          headerRowEl: document.getElementById("usersHeaderRow"),
+          filterBarEl: document.getElementById("usersFilterBar"),
+          applyButtonEl: document.getElementById("usersApplyButton"),
+          statusEl: document.getElementById("usersApplyStatus"),
+          patchUrl: (id) => `${serverUrl()}/users/${id}`,
+          // No deleteUrl - deleting users isn't part of this page.
+        });
+      }
+    }
+
+    document.getElementById("usersReloadButton").addEventListener("click", loadUsers);
+
+    // --- Tabs ---------------------------------------------------------
+    const eventsTabButton = document.getElementById("eventsTabButton");
+    const usersTabButton = document.getElementById("usersTabButton");
+    const eventsTab = document.getElementById("eventsTab");
+    const usersTab = document.getElementById("usersTab");
+
+    function showTab(name) {
+      eventsTab.style.display = name === "events" ? "" : "none";
+      usersTab.style.display = name === "users" ? "" : "none";
+      eventsTabButton.classList.toggle("active", name === "events");
+      usersTabButton.classList.toggle("active", name === "users");
+    }
+    eventsTabButton.addEventListener("click", () => showTab("events"));
+    usersTabButton.addEventListener("click", () => showTab("users"));
+
+    function initApp() {
+      loadEvents();
+      if (currentRole() === "manager") {
+        usersTabButton.style.display = "";
+        loadUsers();
+      }
+    }
+
+    if (accessToken() && APPROVED_ROLES.includes(currentRole())) {
+      unlockManager();
+      initApp();
+    }
+  </script>
+</body>
+</html>

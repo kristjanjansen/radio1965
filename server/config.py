@@ -89,3 +89,23 @@ CONTRIBUTOR_WEB_URL = os.getenv(
 # went wherever that backgrounded shell's stderr happened to be connected
 # - nowhere durable to look at after the fact.
 LOG_FILE = os.getenv("RADIO65_LOG_FILE", "server/logs/server.log")
+
+# Where "Save stream" recordings land on eccm.ee (same host/port/path
+# server/icecast_on_disconnect.sh's rsync already uses) - server/
+# remote_files.py's delete_eccm_stream_file() uses these to ssh in and
+# remove a streamrecording's file when a manager deletes its event
+# (manager/index.html, project-description.md #11). Deliberately no key-
+# path setting here - that ssh call relies on the default identity under
+# $HOME/.ssh of whatever user runs this server, not a dedicated key file.
+RADIO65_ECCM_SSH_HOST = os.getenv("RADIO65_ECCM_SSH_HOST", "eccm.ee")
+RADIO65_ECCM_SSH_PORT = int(os.getenv("RADIO65_ECCM_SSH_PORT", "38307"))
+RADIO65_ECCM_SSH_USER = os.getenv("RADIO65_ECCM_SSH_USER", "eccmee1")
+RADIO65_ECCM_STREAMS_DIR = os.getenv(
+    "RADIO65_ECCM_STREAMS_DIR", "/home/eccmee1/www/radio1965/streams"
+)
+
+# Where server/cron_backup.py (weekly DB backup, project-description.md
+# #11) writes its gzipped mysqldump files, and prunes from, keeping only
+# the 4 most recent.
+BACKUP_DIR = os.getenv("RADIO65_BACKUP_DIR", "/var/backups/radio65")
+BACKUP_KEEP_COUNT = int(os.getenv("RADIO65_BACKUP_KEEP_COUNT", "4"))

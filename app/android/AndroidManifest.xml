@@ -3,7 +3,7 @@
      androiddeployqt, driven by the QT_ANDROID_VERSION_NAME/QT_ANDROID_VERSION_CODE
      target properties in app/CMakeLists.txt (kept in sync with PROJECT_VERSION) -
      the values here are placeholders only. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.eccm.radio65" android:versionName="0.6.4" android:versionCode="6040" android:installLocation="auto">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.eccm.radio65" android:versionName="0.6.5" android:versionCode="6050" android:installLocation="auto">
     <!-- enableOnBackInvokedCallback=false: targetSdkVersion 36 defaults to
          Android 13+'s predictive-back gesture, which Qt's Activity/Window
          teardown doesn't handle correctly - pressing Back left the screen

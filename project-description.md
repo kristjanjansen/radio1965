@@ -490,7 +490,7 @@ Like Beekeeper - when something in a line is changed, mark it with a color (ligh
 
 When a row with streamrecording is being deleted, ask if also audiofile (on eccm.ee) should be deleted.
 
-Create a crontab c
+Create a crontab job to make copies of the databse every Monday, keep last 4 backups.
 
 
 ## 99. Ideas.

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from server import config, db, emailer, joomla_importer, notifications
+from server import config, db, emailer, joomla_importer, notifications, remote_files
 
 # Minimal responsive wrapper for Joomla's article "text" field (a bare HTML
 # fragment with no viewport meta/CSS of its own) - see GET /articles/{id}.
@@ -223,6 +223,43 @@ class EventIn(BaseModel):
     # via icecast_on_connect.sh's ice-audio-info carrier. An unknown/absent
     # token just leaves author_id null, same as before this field existed.
     access_token: str | None = None
+
+
+# manager/index.html - partial edit of an existing event. All fields
+# optional except access_token: only whichever ones are actually present
+# get applied (see update_event()). Deliberately excludes id/payload/
+# author_id/tags/created_at/updated_at - those stay server-managed, not
+# exposed as editable grid columns.
+class EventPatchIn(BaseModel):
+    access_token: str
+    type: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    url: str | None = None
+    status: str | None = None
+    publish_at: str | None = None
+    shelf_at: str | None = None
+    comments_enabled: bool | None = None
+
+
+# manager/index.html - partial edit of an existing user. Role is the only
+# field a manager can change from that grid for now.
+class UserPatchIn(BaseModel):
+    access_token: str
+    role: str | None = None
+
+
+def _require_user(access_token: str, session: Session, roles: tuple[str, ...] = ("contributor", "manager")) -> db.User:
+    """
+    manager/index.html's auth gate - same opaque-access_token-lookup
+    convention as GET /contributors/status, just also checking role.
+    Raises 403 for both "no such token" and "wrong role" (not 401/404) -
+    no need to distinguish them for this internal admin tool.
+    """
+    user = session.query(db.User).filter(db.User.access_token == access_token).one_or_none()
+    if not user or user.role not in roles:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return user
 
 
 @app.post("/notify/topic")
@@ -436,7 +473,11 @@ def login_contributor(req: ContributorLoginIn, session: Session = Depends(db.get
         raise HTTPException(status_code=403, detail="This account cannot log in")
 
     logger.info("login ok for '%s' (id=%s, role=%s)", req.email, user.id, user.role)
-    return {"access_token": user.access_token, "role": user.role}
+    # "id" added for manager/index.html (project-description.md #11), which
+    # needs to know the logged-in user's own id to tell which Events rows a
+    # contributor is allowed to edit (author_id === id) - additive, ignored
+    # by existing callers (contributor/index.html, editor/index.html).
+    return {"access_token": user.access_token, "role": user.role, "id": user.id}
 
 
 @app.post("/contributors/forgot-password")
@@ -640,17 +681,114 @@ def finalize_recording(event_id: str, body: FinalizeRecordingIn, session: Sessio
 
 
 @app.get("/events")
-def list_events(status: list[str] | None = Query(None), session: Session = Depends(db.get_db)):
+def list_events(status: list[str] | None = Query(None), limit: int = Query(200), session: Session = Depends(db.get_db)):
     """
     Feed for the client app (project-description.md #2.1): "New Arrivals"
     (status=new) and "Collection" (status=shelved) by default, since
     unpublished events aren't due yet and archived ones are dropped from
-    both. Pass ?status=... (repeatable) to override.
+    both. Pass ?status=... (repeatable) to override. ?limit=... lets
+    manager/index.html (project-description.md #11) ask for more than the
+    200-row default - no auth here, same public-read posture as before.
     """
     query = session.query(db.Event)
     query = query.filter(db.Event.status.in_(status or ["new", "shelved"]))
-    rows = query.order_by(db.Event.publish_at.desc()).limit(200).all()
+    rows = query.order_by(db.Event.publish_at.desc()).limit(limit).all()
     return {"events": [r.to_dict() for r in rows]}
+
+
+@app.patch("/events/{event_id}")
+def update_event(event_id: str, body: EventPatchIn, session: Session = Depends(db.get_db)):
+    """
+    manager/index.html's per-row "Apply" for an edited Event
+    (project-description.md #11). Only the fields actually present in the
+    request body get touched - everything else on the row is untouched.
+    """
+    row = session.get(db.Event, event_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+    user = _require_user(body.access_token, session)
+    if user.role != "manager" and row.author_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this event")
+
+    if body.type is not None:
+        if body.type not in db.EVENT_TYPES:
+            raise HTTPException(status_code=400, detail=f"Invalid type '{body.type}'")
+        row.type = body.type
+    if body.title is not None:
+        row.title = body.title
+    if body.summary is not None:
+        row.summary = body.summary
+    if body.url is not None:
+        row.url = body.url
+    if body.status is not None:
+        if body.status not in db.EVENT_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Invalid status '{body.status}'")
+        row.status = body.status
+    if body.publish_at is not None:
+        row.publish_at = _parse_datetime(body.publish_at)
+    if body.shelf_at is not None:
+        row.shelf_at = _parse_datetime(body.shelf_at)
+    if body.comments_enabled is not None:
+        row.comments_enabled = body.comments_enabled
+
+    session.commit()
+    session.refresh(row)
+    return {"event": row.to_dict()}
+
+
+@app.delete("/events/{event_id}")
+def delete_event(event_id: str, access_token: str, delete_audio_file: bool = False, session: Session = Depends(db.get_db)):
+    """
+    manager/index.html's per-row "Apply" for a row marked for deletion
+    (project-description.md #11). `delete_audio_file` only matters for
+    type="streamrecording" rows - the DB row itself is always removed
+    (cascades to its Tag rows via the existing FK) regardless of whether
+    the remote file deletion below succeeds, since a failed best-effort
+    remote delete shouldn't block the DB cleanup the manager actually asked
+    for.
+    """
+    row = session.get(db.Event, event_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found")
+    user = _require_user(access_token, session)
+    if user.role != "manager" and row.author_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this event")
+
+    if delete_audio_file and row.type == "streamrecording" and row.url:
+        remote_files.delete_eccm_stream_file(row.url)
+
+    session.delete(row)
+    session.commit()
+    return {"ok": True}
+
+
+@app.get("/users")
+def list_users(access_token: str, session: Session = Depends(db.get_db)):
+    """manager/index.html's Users tab (project-description.md #11) - manager role only."""
+    _require_user(access_token, session, roles=("manager",))
+    rows = session.query(db.User).order_by(db.User.id).all()
+    return {"users": [
+        {"id": u.id, "name": u.name, "email": u.email, "role": u.role, "created_at": u.created_at.isoformat()}
+        for u in rows
+    ]}
+
+
+@app.patch("/users/{user_id}")
+def update_user(user_id: int, body: UserPatchIn, session: Session = Depends(db.get_db)):
+    """manager/index.html's per-row "Apply" for an edited User - manager role only."""
+    _require_user(body.access_token, session, roles=("manager",))
+    row = session.get(db.User, user_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"User '{user_id}' not found")
+
+    if body.role is not None:
+        if body.role not in db.USER_ROLES:
+            raise HTTPException(status_code=400, detail=f"Invalid role '{body.role}'")
+        row.role = body.role
+
+    session.commit()
+    session.refresh(row)
+    return {"id": row.id, "name": row.name, "email": row.email, "role": row.role, "created_at": row.created_at.isoformat()}
 
 
 @app.get("/articles/{article_id}")

@@ -6,6 +6,7 @@ on:
     paths:
       - 'editor/**'
       - 'contributor/**'
+      - 'manager/**'
   workflow_dispatch:
 
 jobs:
@@ -33,3 +34,9 @@ jobs:
           rsync -avz -e "ssh -p ${{ secrets.SSH_PORT }}" \
             "contributor/index.html" \
             "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.REMOTE_PATH }}/contributor/index.html"
+
+      - name: Deploy manager/
+        run: |
+          rsync -avz -e "ssh -p ${{ secrets.SSH_PORT }}" \
+            "manager/index.html" \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.REMOTE_PATH }}/manager/index.html"
