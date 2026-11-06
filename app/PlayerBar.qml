@@ -103,9 +103,11 @@ Item {
                 model: root.controller.channelOptions
                 currentIndex: root.controller.channelOptions.indexOf(root.controller.selectedChannel)
                 onActivated: root.controller.selectChannel(root.controller.channelOptions[currentIndex])
+                // a pool by its name and show, never its channel (PlaybackController.channelLabel)
+                displayText: root.controller.channelLabel(currentText)
                 delegate: ItemDelegate {
                     width: channelCombo.width
-                    text: modelData
+                    text: root.controller.channelLabel(modelData)
                     enabled: root.controller.isChannelStreaming(modelData)
                 }
                 background: Rectangle {

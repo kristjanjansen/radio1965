@@ -34,25 +34,85 @@ QtObject {
     // livestream card still plays its own url (playMedia), wherever it is.
     readonly property string v2inBaseUrl: "https://v2in.stream"
     property var v2inNow: null
-    readonly property var channelOptions: root.v2inNow ? root.v2inNow.channels.map(c => c.id) : []
+    // Pools (GET /api/now's pools, e.g. community) are listed as v2in's front page shows them, by name and never by
+    // their channels (community1, ...): with nobody live, the pool itself, which does not play and says "Nobody live
+    // now" or the raid's line; with someone live, one entry per show, "<pool>: <show>", each playing its own channel.
+    readonly property var channelOptions: root.v2inNow
+        ? root.v2inNow.channels.map(c => c.id).concat((root.v2inNow.pools || []).reduce(
+              (all, p) => all.concat(p.live && p.live.length ? p.live.map(l => l.channel) : [p.id]), []))
+        : []
     function isV2inChannel(channel) {
         return root.channelOptions.indexOf(channel) !== -1;
     }
+    // { pool, live } for a pool's id (live null) or one of its live channels, in `now` (an /api/now answer)
+    function _poolEntry(channel, now) {
+        for (const p of (now && now.pools) || []) {
+            if (p.id === channel)
+                return { pool: p, live: null };
+            const l = (p.live || []).find(x => x.channel === channel);
+            if (l)
+                return { pool: p, live: l };
+        }
+        return null;
+    }
+    // A main channel as /api/now gives it; a pool's entry in the same shape (status "offline" for a pool nobody is
+    // live on, so it is not offered to play)
     function v2inChannel(channel) {
-        return root.v2inNow ? (root.v2inNow.channels.find(c => c.id === channel) || null) : null;
+        if (!root.v2inNow)
+            return null;
+        const c = root.v2inNow.channels.find(x => x.id === channel);
+        if (c)
+            return c;
+        const e = root._poolEntry(channel, root.v2inNow);
+        if (!e)
+            return null;
+        return e.live
+            ? { id: channel, name: e.pool.name, pool: true, status: e.pool.status === "silent" ? "silent" : "live",
+                title: e.live.title, by: e.live.artist, live: e.live }
+            : { id: channel, name: e.pool.name, pool: true, status: "offline", title: "", by: "", live: null,
+                silence: e.pool.silence };
+    }
+    // What PlayerBar's channel picker shows: a main channel's id, as before; a pool's name, with its show, or with
+    // "Nobody live now" or the raid's line
+    function channelLabel(channel) {
+        const c = root.v2inChannel(channel);
+        if (!c || !c.pool)
+            return channel;
+        const line = c.live ? [c.by, c.title].filter(Boolean).join(" - ") : (c.silence || qsTr("Nobody live now"));
+        return line ? c.name + ": " + line : c.name;
     }
     function refreshV2inNow() {
         const xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function () {
             if (xhr.readyState !== XMLHttpRequest.DONE || xhr.status !== 200)
                 return;
+            const before = root._poolEntry(root.selectedChannel, root.v2inNow);
             try { root.v2inNow = JSON.parse(xhr.responseText); } catch (e) { return; }
-            if (root.channelOptions.indexOf(root.selectedChannel) === -1)
-                root.selectedChannel = root.channelOptions[0] || "";
+            if (root.channelOptions.indexOf(root.selectedChannel) === -1) {
+                const pool = before ? (root.v2inNow.pools || []).find(p => p.id === before.pool.id) : null;
+                if (pool)
+                    root._poolChanged(pool);
+                else
+                    root.selectedChannel = root.channelOptions[0] || "";
+            }
             root.refreshLiveInfo();
         };
         xhr.open("GET", root.v2inBaseUrl + "/api/now");
         xhr.send();
+    }
+    // The chosen pool entry is gone: its show ended, or someone went live on an idle pool. The pool's first live show
+    // is chosen, else the pool itself; one that was playing goes on with that show, or stops when nobody is left.
+    function _poolChanged(pool) {
+        const playing = root.isLive && !root.mediaUrl
+            && (player.playbackState !== MediaPlayer.StoppedState || root.liveStreamOffline || root.loading);
+        const next = pool.live && pool.live.length ? pool.live[0].channel : pool.id;
+        root.selectedChannel = next;
+        if (!playing)
+            return;
+        if (next === pool.id)
+            root.stop();
+        else
+            root.start();
     }
     property Timer _v2inTimer: Timer {
         interval: root.isLive && root.isV2inChannel(root.selectedChannel) ? 10000 : 60000
@@ -239,6 +299,10 @@ QtObject {
         // a v2in channel says itself what it plays (GET /api/now): the show or the file, by whom, a date apart; the
         // raid's line while it is silent
         const v2in = root.mediaUrl ? null : root.v2inChannel(root.selectedChannel);
+        if (v2in && v2in.pool && !v2in.live) {
+            root.liveInfo = { title: v2in.name, summary: v2in.silence || qsTr("Nobody live now") };
+            return;
+        }
         if (v2in && v2in.status !== "offline" && (v2in.title || v2in.by)) {
             root.liveInfo = { title: [v2in.by, v2in.title].filter(Boolean).join(" - "),
                               summary: v2in.status === "silent" ? qsTr("Silent until the alert ends")
@@ -306,6 +370,15 @@ QtObject {
     }
 
     function start() {
+        // a pool nobody is live on has nothing to play: its line says so
+        const idle = root.isLive && !root.mediaUrl ? root.v2inChannel(root.selectedChannel) : null;
+        if (idle && idle.pool && !idle.live) {
+            player.stop();
+            root.loading = false;
+            root.liveStreamOffline = false;
+            root.refreshLiveInfo();
+            return;
+        }
         root.loading = true;
         root.errorMessage = "";
         root.liveStreamOffline = false;
