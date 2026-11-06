@@ -1203,21 +1203,10 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
                 }
 
                 BroadcastPage {
-                    // "manager" per project-description.md #10.2: "Only
-                    // people with role 'contributor', 'temporaryContributor'
-                    // and 'manager' can broadcast". Nothing assigns
-                    // "manager" yet (manual DB update only - see the
-                    // registration plan's "Out of scope" notes), but the
-                    // gate itself should already respect it.
-                    isContributor: userSettings.role === "contributor" || userSettings.role === "temporaryContributor"
-                                   || userSettings.role === "manager"
-                    isTemporaryContributor: userSettings.role === "temporaryContributor"
-                    // Threaded down into IcecastBroadcaster's ice-audio-info
-                    // header so server/icecast_on_connect.sh can set the
-                    // published event's author_id - empty for
-                    // temporaryContributor, which has no account/token.
-                    accessToken: userSettings.accessToken
-                    isManager: userSettings.role === "manager"
+                    // Anyone with a stream key from v2in's admins can
+                    // broadcast; the key, not an app role, says where.
+                    // The controller's GET /api/now says what is offered.
+                    controller: playbackController
                 }
 
 

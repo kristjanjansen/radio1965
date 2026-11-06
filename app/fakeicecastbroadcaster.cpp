@@ -18,7 +18,7 @@ void FakeIcecastBroadcaster::setGain(qreal gain)
     emit gainChanged();
 }
 
-void FakeIcecastBroadcaster::startBroadcast(const QString &, const QString &, const QString &, bool, bool, const QString &)
+void FakeIcecastBroadcaster::startBroadcast(const QString &, bool, const QString &, const QString &, const QString &, bool, bool)
 {
     if (m_broadcasting)
         return;
