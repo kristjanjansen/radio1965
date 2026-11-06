@@ -27,13 +27,14 @@ QtObject {
     readonly property string radio1965StreamUrl: "https://v2in.stream/stream/radio1965"
 
     // The channels are v2in's (https://v2in.stream), as its GET /api/now lists them (today radio1965, kcmd and
-    // live), so a channel added there needs no app release; radio1965 alone until the first answer. The same answer
+    // live), so a channel added there needs no app release; none until the first answer, which chooses its first
+    // channel when none of its channels is chosen. The same answer
     // says what each one plays now (title, by, a date; who is live; silent during an air-raid alert in Kyiv), read
     // every 10 s while one plays and every minute otherwise, never while the app is in the background. A tapped
     // livestream card still plays its own url (playMedia), wherever it is.
     readonly property string v2inBaseUrl: "https://v2in.stream"
     property var v2inNow: null
-    readonly property var channelOptions: root.v2inNow ? root.v2inNow.channels.map(c => c.id) : ["radio1965"]
+    readonly property var channelOptions: root.v2inNow ? root.v2inNow.channels.map(c => c.id) : []
     function isV2inChannel(channel) {
         return root.channelOptions.indexOf(channel) !== -1;
     }
@@ -46,6 +47,8 @@ QtObject {
             if (xhr.readyState !== XMLHttpRequest.DONE || xhr.status !== 200)
                 return;
             try { root.v2inNow = JSON.parse(xhr.responseText); } catch (e) { return; }
+            if (root.channelOptions.indexOf(root.selectedChannel) === -1)
+                root.selectedChannel = root.channelOptions[0] || "";
             root.refreshLiveInfo();
         };
         xhr.open("GET", root.v2inBaseUrl + "/api/now");
@@ -144,7 +147,7 @@ QtObject {
     // has to take over that role. Nothing actually plays until the user
     // presses Play or picks a channel, though - see start()/selectChannel().
     property bool isLive: true
-    property string selectedChannel: "radio1965"
+    property string selectedChannel: ""   // v2in's first channel once /api/now answers
 
     // Purely which combobox PlayerBar.qml shows (live channels vs recent
     // media) - independent of isLive/mediaUrl so toggling this in the UI
