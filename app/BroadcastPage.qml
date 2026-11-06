@@ -3,55 +3,76 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Lets the user go live on one of Icecast's 5 fixed mountpoints
-// (project-description.md #8.1/#9), broadcasting microphone audio via
-// IcecastBroadcaster (app/icecastbroadcaster.h/.cpp). Desktop-only: that
-// C++ object is only registered as context property "icecastBroadcaster"
-// when app/CMakeLists.txt's RADIO65_ENABLE_BROADCAST is defined, so this
-// page checks for its existence at runtime rather than relying on a
-// separate platform flag - keeps the tab itself always present (needed to
-// keep TabBar/SwipeView index alignment, same convention used for "Live").
+// Lets a contributor, temporary contributor or manager go live on v2in
+// (https://v2in.stream), broadcasting microphone audio via
+// IcecastBroadcaster (app/icecastbroadcaster.h/.cpp). Contributors and
+// temporary contributors go to the pool "community", which v2in claims a
+// free channel of first; managers also to "live", straight to the harbor.
+// The harbor password is the login's access_token, or the temporary
+// contributor password; v2in checks it with this app's server and refuses
+// with a reason worded here. Desktop and Android only: that C++ object is
+// only registered as context property "icecastBroadcaster" when
+// app/CMakeLists.txt's RADIO65_ENABLE_BROADCAST is defined, so this page
+// checks for its existence at runtime rather than relying on a separate
+// platform flag - keeps the tab itself always present (needed to keep
+// TabBar/SwipeView index alignment, same convention used for "Live").
 Item {
     id: root
 
     readonly property bool broadcastAvailable: typeof icecastBroadcaster !== "undefined"
-    // Passed in from Main.qml (userSettings.role === "contributor" or
-    // "temporaryContributor") - gates the broadcast UI the same way
-    // broadcastAvailable does, without removing the tab itself (see the
-    // class comment above).
+    // Passed in from Main.qml (userSettings.role === "contributor",
+    // "temporaryContributor" or "manager") - gates the broadcast UI the
+    // same way broadcastAvailable does, without removing the tab itself
+    // (see the class comment above).
     property bool isContributor: false
     // Passed in from Main.qml (userSettings.role === "temporaryContributor")
-    // - project-description.md #10.1's per-session broadcast time limit +
-    // cooldown only apply to this role, never to a full "contributor".
+    // - only for wording: v2in itself limits a temporary contributor to 3
+    // minutes, and the claim's "until" shows the time left.
     property bool isTemporaryContributor: false
-    // Passed in from Main.qml (userSettings.accessToken) - forwarded into
-    // IcecastBroadcaster.startBroadcast() so the published event's
-    // author_id can be set server-side (see icecast_on_connect.sh).
-    property string accessToken: ""
-    // Passed in from Main.qml (userSettings.role === "manager") - gates
-    // "live" below. project-description.md's Channels section: "live -
-    // live audio broadcast (by managers)". Icecast itself also protects
-    // /live with its own mount-specific password (see
-    // icecastbroadcaster.cpp's ICECAST_LIVE_PASSWORD) - this UI gate alone
-    // isn't the real enforcement, just keeps non-managers from seeing an
-    // option that would fail to connect anyway.
+    // Passed in from Main.qml (userSettings.role === "manager") - offers
+    // "live" below. v2in refuses it to anyone else in any case.
     property bool isManager: false
-    // "like 5 minutes" per project-description.md #10.1.
-    readonly property int temporaryBroadcastLimitSeconds: 180 // 3 minutes
-    // radio1965 (the always-on main channel) is deliberately excluded -
-    // broadcast to it only by external tools (ezstream/raw ffmpeg directly
-    // against Icecast, see icecastbroadcaster.cpp's own comments), never
-    // picked here by an app user.
-    readonly property var channelNames: root.isManager
-        ? ["live", "user1", "user2", "user3", "user4"]
-        : ["user1", "user2", "user3", "user4"]
-    property var occupiedChannels: []
+    // Passed in from Main.qml: userSettings.accessToken, or for a temporary
+    // contributor the password they typed (userSettings.temporaryPassword).
+    // Sent only as the harbor password and in the claim, never in
+    // published metadata.
+    property string key: ""
+    // { id, name, pool } for the ComboBox below.
+    readonly property var targets: root.isManager
+        ? [{ id: "community", name: "community", pool: true }, { id: "live", name: "live", pool: false }]
+        : [{ id: "community", name: "community", pool: true }]
     property string errorMessage: ""
 
-    //background: Rectangle { color: "transparent" }
+    function targetName(id) {
+        const t = root.targets.find(x => x.id === id);
+        return t ? t.name : id;
+    }
 
-    function isChannelOccupied(channel) {
-        return root.occupiedChannels.indexOf(channel) !== -1;
+    // v2in's refusals (POST /api/live/claim, /api/live/check), in words;
+    // next is when it may work, shown as a local time.
+    function refusalText(reason, next, target) {
+        const at = next ? Qt.formatTime(new Date(next), "HH:mm") : "";
+        const name = root.targetName(target);
+        switch (reason) {
+        case "unknown key": return root.isTemporaryContributor
+                                   ? qsTr("The temporary contributor password is not accepted. Enter the current one from the menu.")
+                                   : qsTr("v2in did not accept your contributor login.");
+        case "revoked": return qsTr("Your broadcasting access no longer works.");
+        case "kicked": return qsTr("Your broadcast was stopped by v2in's admins.");
+        case "expired": return qsTr("Your broadcasting access has expired.");
+        case "too early": return qsTr("Your show has not started yet.");
+        case "wrong channel": return qsTr("You may not broadcast on %1.").arg(name);
+        case "no such channel": return qsTr("%1 is not on v2in any more.").arg(name);
+        case "channel taken": return qsTr("Someone is live on %1 now.").arg(name);
+        case "pool full": return at ? qsTr("Every %1 channel is taken. Try again at %2.").arg(name).arg(at)
+                                    : qsTr("Every %1 channel is taken. Try again later.").arg(name);
+        case "cooldown": return at ? qsTr("You were live a moment ago. Try again at %1.").arg(at)
+                                   : qsTr("You were live a moment ago. Try again later.");
+        case "time is up": return at ? qsTr("Your time is up. Try again at %1.").arg(at)
+                                     : qsTr("Your time is up.");
+        case "too many tries": return qsTr("Too many wrong tries. Wait a minute and try again.");
+        default: return qsTr("v2in refused: %1").arg(reason);
+        }
     }
 
     function formatElapsed(seconds) {
@@ -69,18 +90,13 @@ Item {
 
     Connections {
         target: root.broadcastAvailable ? icecastBroadcaster : null
-        function onOccupiedChannelsChanged(list) { root.occupiedChannels = list; }
         // root.errorMessage, not a Loader-internal id: ids declared inside
         // the Loader's inline sourceComponent below live in that Component's
         // own scope and aren't reachable from this outer Connections (that
         // was the "errorLabel is not defined" crash - e.g. when Icecast
         // rejects a connect attempt to an already-occupied channel).
         function onBroadcastError(message) { root.errorMessage = message; }
-    }
-
-    Component.onCompleted: {
-        if (root.broadcastAvailable)
-            icecastBroadcaster.refreshOccupiedChannels();
+        function onRefused(reason, next, target) { root.errorMessage = root.refusalText(reason, next, target); }
     }
 
     Label {
@@ -128,70 +144,10 @@ Item {
                 category: "Broadcast"
                 property string name: ""
                 property string description: ""
-                property string lastChannel: "user1"
+                property string lastChannel: "community"
                 property bool sendNotification: true
                 property bool saveStream: true
                 property real gain: 1.0
-                // ISO datetime string, "" when no cooldown is active -
-                // project-description.md #10.1's per-session broadcast
-                // limit for temporaryContributor. Persisted (not just an
-                // in-memory property) so the cooldown survives an app
-                // restart too, not just staying within one run.
-                property string temporaryCooldownUntil: ""
-            }
-
-            // Forces temporaryCooldownRemainingSeconds below to
-            // re-evaluate once a second - a plain Date.now()-based
-            // computation has no QML property to bind to, so without this
-            // tick it would only ever update when something else happened
-            // to touch the UI.
-            property int _nowTick: 0
-            Timer {
-                interval: 1000
-                running: root.isTemporaryContributor
-                repeat: true
-                onTriggered: parent._nowTick++
-            }
-
-            readonly property real temporaryCooldownRemainingSeconds: {
-                // References _nowTick (unused otherwise) purely so this
-                // binding re-evaluates on the Timer's tick above - a plain
-                // Date.now()-based computation has no QML property of its
-                // own to bind to.
-                if (_nowTick < 0 || !root.isTemporaryContributor || !broadcastSettings.temporaryCooldownUntil)
-                    return 0;
-                const until = new Date(broadcastSettings.temporaryCooldownUntil).getTime();
-                return Math.max(0, (until - Date.now()) / 1000);
-            }
-
-            // Called on *any* end of a temporaryContributor's broadcast -
-            // reaching the time limit (auto-stop, below) or a manual Stop
-            // press (the Start/Stop Button's onClicked) both count as using
-            // up the session, so the cooldown starts either way. Otherwise
-            // someone could just stop manually just before the limit and
-            // immediately start a fresh full-length session, defeating the
-            // whole point of the limit.
-            function endTemporaryBroadcastSession() {
-                if (root.isTemporaryContributor) {
-                    broadcastSettings.temporaryCooldownUntil =
-                        new Date(Date.now() + root.temporaryBroadcastLimitSeconds * 1000).toISOString();
-                }
-            }
-
-            // Force-stops a temporaryContributor's broadcast once it hits
-            // the time limit - icecastBroadcaster.elapsedSeconds already
-            // ticks every second (see the existing elapsed-time Label
-            // below), so this just watches it rather than running a
-            // second independent timer.
-            Connections {
-                target: icecastBroadcaster
-                function onElapsedSecondsChanged() {
-                    if (root.isTemporaryContributor && icecastBroadcaster.broadcasting
-                            && icecastBroadcaster.elapsedSeconds >= root.temporaryBroadcastLimitSeconds) {
-                        icecastBroadcaster.stopBroadcast();
-                        form.endTemporaryBroadcastSession();
-                    }
-                }
             }
 
             // Restores the last-used gain onto the C++ broadcaster - m_gain
@@ -202,19 +158,27 @@ Item {
             Component.onCompleted: icecastBroadcaster.gain = broadcastSettings.gain
 
 
+            // A temporary contributor from an earlier version has no password
+            // kept: the menu's Temporary contributor asks for it again.
+            Label {
+                Layout.fillWidth: true
+                visible: !icecastBroadcaster.broadcasting && root.key === ""
+                wrapMode: Text.Wrap
+                color: "crimson"
+                text: qsTr("Enter the temporary contributor password again from the menu to broadcast.")
+            }
+
             ComboBox {
                 id: channelCombo
                 Layout.fillWidth: true
                 visible: !icecastBroadcaster.broadcasting
                 enabled: !icecastBroadcaster.broadcasting
-                model: root.channelNames
-                currentIndex: Math.max(0, root.channelNames.indexOf(broadcastSettings.lastChannel))
-                onActivated: broadcastSettings.lastChannel = channelCombo.currentText
-                delegate: ItemDelegate {
-                    width: channelCombo.width
-                    text: modelData
-                    enabled: !root.isChannelOccupied(modelData)
-                }
+                model: root.targets
+                textRole: "name"
+                valueRole: "id"
+                currentIndex: Math.max(0, root.targets.findIndex(t => t.id === broadcastSettings.lastChannel))
+                onActivated: broadcastSettings.lastChannel = channelCombo.currentValue
+                readonly property var target: root.targets[currentIndex] || null
 
                 // ComboBox has no built-in placeholderText equivalent (unlike
                 // TextField above), so this mimics one by hand: a small
@@ -232,14 +196,6 @@ Item {
                     anchors.left: parent.left
                     anchors.leftMargin: 12
                     anchors.verticalCenter: parent.top
-                }
-
-
-                // Refresh on open instead of a separate refresh button -
-                // same pattern as PlayerBar.qml's channel combobox.
-                Connections {
-                    target: channelCombo.popup
-                    function onOpened() { icecastBroadcaster.refreshOccupiedChannels(); }
                 }
             }
 
@@ -381,42 +337,19 @@ Item {
             Button {
                 Layout.alignment: Qt.AlignHCenter
                 text: icecastBroadcaster.broadcasting ? qsTr("Stop") : qsTr("Start")
-                // channelCombo.currentText defaults to broadcastSettings.lastChannel
-                // ("user1" the first time) without the user ever having to open
-                // the dropdown - the delegate's `enabled: !root.isChannelOccupied(...)`
-                // above only blocks *picking* an occupied channel from the popup, it
-                // does nothing for a channel that's already selected by default. Gate
-                // Start itself so a busy default channel can't be broadcast to either
-                // way - only applies while not already broadcasting, so Stop is always
-                // clickable.
-                // Also blocked while a temporaryContributor's cooldown is
-                // still running - same reasoning as the busy-channel gate
-                // above, just a second independent condition.
+                // Stop is always clickable; Start needs a key. Whether it may
+                // go there is v2in's to say, on Start.
                 enabled: icecastBroadcaster.broadcasting
-                         || (!root.isChannelOccupied(channelCombo.currentText) && form.temporaryCooldownRemainingSeconds <= 0)
+                         || (root.key !== "" && channelCombo.target !== null)
                 onClicked: {
                     if (icecastBroadcaster.broadcasting) {
                         icecastBroadcaster.stopBroadcast();
-                        form.endTemporaryBroadcastSession();
                     } else {
                         root.errorMessage = "";
-                        icecastBroadcaster.startBroadcast(channelCombo.currentText, nameField.text, descriptionField.text, sendNotificationCheck.checked, saveStreamCheck.checked, root.accessToken);
+                        const t = channelCombo.target;
+                        icecastBroadcaster.startBroadcast(t.id, t.pool, root.key, nameField.text, descriptionField.text, sendNotificationCheck.checked, saveStreamCheck.checked);
                     }
                 }
-            }
-
-            Label {
-                Layout.alignment: Qt.AlignHCenter
-                visible: !icecastBroadcaster.broadcasting && root.isChannelOccupied(channelCombo.currentText)
-                text: qsTr("Channel \"%1\" is busy").arg(channelCombo.currentText)
-                color: "crimson"
-            }
-
-            Label {
-                Layout.alignment: Qt.AlignHCenter
-                visible: !icecastBroadcaster.broadcasting && form.temporaryCooldownRemainingSeconds > 0
-                text: qsTr("Broadcasting limit reached - try again in %1").arg(root.formatElapsed(form.temporaryCooldownRemainingSeconds))
-                color: "crimson"
             }
 
             Label {
@@ -430,9 +363,12 @@ Item {
             Label {
                 Layout.alignment: Qt.AlignHCenter
                 visible: icecastBroadcaster.broadcasting
-                text: root.isTemporaryContributor
+                // until: the session's end from v2in's claim (a temporary
+                // contributor's 3 minutes), 0 for none; re-read on each
+                // elapsed tick
+                text: icecastBroadcaster.until > 0
                       ? qsTr("%1 (%2 left)").arg(root.formatElapsed(icecastBroadcaster.elapsedSeconds))
-                            .arg(root.formatElapsed(Math.max(0, root.temporaryBroadcastLimitSeconds - icecastBroadcaster.elapsedSeconds)))
+                            .arg(root.formatElapsed(icecastBroadcaster.elapsedSeconds >= 0 ? (icecastBroadcaster.until - Date.now()) / 1000 : 0))
                       : root.formatElapsed(icecastBroadcaster.elapsedSeconds)
             }
 

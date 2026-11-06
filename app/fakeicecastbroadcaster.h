@@ -15,6 +15,7 @@ class FakeIcecastBroadcaster : public QObject
     Q_PROPERTY(int elapsedSeconds READ elapsedSeconds NOTIFY elapsedSecondsChanged)
     Q_PROPERTY(qreal inputLevel READ inputLevel NOTIFY inputLevelChanged)
     Q_PROPERTY(qreal gain READ gain WRITE setGain NOTIFY gainChanged)
+    Q_PROPERTY(qint64 until READ until NOTIFY untilChanged)
 
 public:
     explicit FakeIcecastBroadcaster(QObject *parent = nullptr);
@@ -25,8 +26,9 @@ public:
     qreal inputLevel() const { return 0.4; }
     qreal gain() const { return m_gain; }
     void setGain(qreal gain);
+    qint64 until() const { return 0; }
 
-    Q_INVOKABLE void startBroadcast(const QString &channel, const QString &name, const QString &description, bool sendNotification, bool saveStream, const QString &accessToken = QString());
+    Q_INVOKABLE void startBroadcast(const QString &target, bool pool, const QString &key, const QString &name, const QString &description, bool sendNotification, bool saveStream);
     Q_INVOKABLE void stopBroadcast();
     Q_INVOKABLE void refreshOccupiedChannels();
 
@@ -38,6 +40,8 @@ signals:
     void occupiedChannelsChanged(const QStringList &occupied);
     void inputLevelChanged();
     void gainChanged();
+    void untilChanged();
+    void refused(const QString &reason, const QString &next, const QString &target);
 
 private:
     QTimer m_timer;

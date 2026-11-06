@@ -2,6 +2,7 @@
 
 #include <QAudioSource>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QIODevice>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -26,24 +27,13 @@
 
 namespace {
 
-const char *const ICECAST_HOST = "live.uuu.ee";
-const quint16 ICECAST_PORT = 8001;
-// TODO: confirm against the live Icecast config - project-description.md
-// #8.1's test commands show this value in one example and a <Password>
-// placeholder in another, so it isn't certain to still be current.
-const char *const ICECAST_PASSWORD = "Tesla100";
-// /live's icecast.xml <mount> block overrides the global source password
-// with this one (project-description.md's Channels section: "live - live
-// audio broadcast (by managers)") - keeps a non-manager who somehow still
-// picked "live" (or an external tool pointed at that mountpoint) from
-// authenticating with the regular user1-user4 password. Same caveat as
-// ICECAST_PASSWORD above: a hardcoded constant shipped in the app binary
-// isn't a secret from a determined attacker, just a soft gate consistent
-// with this app's existing security model - real protection is Icecast
-// itself rejecting the mismatched password.
-// TODO: replace with the actual password configured on /live's <mount>
-// block before relying on this.
-const char *const ICECAST_LIVE_PASSWORD = "Tesla200";
+// v2in's harbor: Liquidsoap taking Icecast sources, mount = channel, user
+// "source", password = the broadcaster's key (startBroadcast()). No
+// password lives in the app.
+const char *const ICECAST_HOST = "v2in.stream";
+const quint16 ICECAST_PORT = 8005;
+// v2in's API: /api/live/claim, /api/live/check, /api/now.
+const char *const V2IN_API = "https://v2in.stream/api";
 const char *const ICE_GENRE = "avant-garde";
 
 constexpr int SAMPLE_RATE = 44100;
@@ -70,7 +60,7 @@ int IcecastBroadcaster::elapsedSeconds() const
     return m_broadcasting ? static_cast<int>(m_elapsed.elapsed() / 1000) : 0;
 }
 
-void IcecastBroadcaster::startBroadcast(const QString &channel, const QString &name, const QString &description, bool sendNotification, bool saveStream, const QString &accessToken)
+void IcecastBroadcaster::startBroadcast(const QString &target, bool pool, const QString &key, const QString &name, const QString &description, bool sendNotification, bool saveStream)
 {
     if (m_broadcasting)
         return;
@@ -83,9 +73,9 @@ void IcecastBroadcaster::startBroadcast(const QString &channel, const QString &n
     case Qt::PermissionStatus::Granted:
         break;
     case Qt::PermissionStatus::Undetermined:
-        qApp->requestPermission(micPermission, this, [this, channel, name, description, sendNotification, saveStream, accessToken](const QPermission &permission) {
+        qApp->requestPermission(micPermission, this, [this, target, pool, key, name, description, sendNotification, saveStream](const QPermission &permission) {
             if (qApp->checkPermission(permission) == Qt::PermissionStatus::Granted)
-                startBroadcast(channel, name, description, sendNotification, saveStream, accessToken);
+                startBroadcast(target, pool, key, name, description, sendNotification, saveStream);
             else
                 emit broadcastError(tr("Microphone permission was denied."));
         });
@@ -94,6 +84,70 @@ void IcecastBroadcaster::startBroadcast(const QString &channel, const QString &n
         emit broadcastError(tr("Microphone permission was denied. Enable it in system settings."));
         return;
     }
+
+    goLive(target, pool, key, name, description, sendNotification, saveStream);
+}
+
+void IcecastBroadcaster::goLive(const QString &target, bool pool, const QString &key, const QString &name, const QString &description, bool sendNotification, bool saveStream)
+{
+    m_target = target;
+    m_pool = pool;
+    m_key = key.trimmed();
+    m_name = name;
+    m_description = description;
+    m_sendNotification = sendNotification;
+    m_saveStream = saveStream;
+    m_channel.clear();
+
+    // broadcasting from here on, so Stop works while the claim is out too
+    m_broadcasting = true;
+    emit broadcastStateChanged();
+
+    if (!pool) {
+        openStream(target);
+        return;
+    }
+
+    // A pool names no channel: v2in picks a free one and holds it for this
+    // key 60 s, which openStream() connects to well within.
+    QNetworkRequest request(QUrl(QString::fromLatin1(V2IN_API) + "/live/claim"));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    const QJsonObject body{{"pool", target}, {"key", m_key}, {"keep", saveStream}};
+    m_apiReply = m_statusNam.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    connect(m_apiReply, &QNetworkReply::finished, this, &IcecastBroadcaster::onClaimReply);
+}
+
+void IcecastBroadcaster::onClaimReply()
+{
+    auto *reply = qobject_cast<QNetworkReply *>(sender());
+    if (!reply)
+        return;
+    reply->deleteLater();
+    // stopped meanwhile (teardown() aborts and forgets it) or an older one
+    if (reply != m_apiReply)
+        return;
+    m_apiReply = nullptr;
+
+    const QJsonObject answer = QJsonDocument::fromJson(reply->readAll()).object();
+    if (reply->error() != QNetworkReply::NoError && answer.isEmpty()) {
+        emit broadcastError(tr("Could not reach v2in: %1").arg(reply->errorString()));
+        teardown();
+        return;
+    }
+    if (!answer.value("ok").toBool()) {
+        emit refused(answer.value("reason").toString(), answer.value("next").toString(), m_target);
+        teardown();
+        return;
+    }
+    const QString until = answer.value("until").toString();
+    m_until = until.isEmpty() ? 0 : QDateTime::fromString(until, Qt::ISODateWithMs).toMSecsSinceEpoch();
+    emit untilChanged();
+    openStream(answer.value("channel").toString());
+}
+
+void IcecastBroadcaster::openStream(const QString &channel)
+{
+    m_channel = channel;
 
 #ifdef Q_OS_IOS
     // Must happen before QAudioSource opens the mic below - otherwise Qt
@@ -137,30 +191,21 @@ void IcecastBroadcaster::startBroadcast(const QString &channel, const QString &n
     connect(m_socket, &QTcpSocket::errorOccurred, this, &IcecastBroadcaster::onSocketErrorOccurred);
     connect(m_socket, &QTcpSocket::disconnected, this, &IcecastBroadcaster::onSocketDisconnected);
 
-    // Captured for sendIcecastHandshake(), called once connected().
-    m_socket->setProperty("channel", channel);
-    m_socket->setProperty("name", name);
-    m_socket->setProperty("description", description);
-    m_socket->setProperty("sendNotification", sendNotification);
-    m_socket->setProperty("saveStream", saveStream);
-    m_socket->setProperty("accessToken", accessToken);
-
     m_socket->connectToHost(QString::fromLatin1(ICECAST_HOST), ICECAST_PORT);
 
-    m_broadcasting = true;
-    emit broadcastStateChanged();
     m_elapsed.start();
     m_elapsedTicker.start();
 }
 
-void IcecastBroadcaster::sendIcecastHandshake(const QString &channel, const QString &name, const QString &description, bool sendNotification, bool saveStream, const QString &accessToken)
+void IcecastBroadcaster::sendIcecastHandshake()
 {
     // HTTP/1.0, no Content-Length/Transfer-Encoding: Icecast's source-over-
     // PUT protocol treats the connection as a continuous stream once
     // headers end, matching ffmpeg's icecast:// muxer / libshout, and
-    // matching Icecast's own "HTTP/1.0 200 OK"-style reply.
-    const char *const password = (channel == QStringLiteral("live")) ? ICECAST_LIVE_PASSWORD : ICECAST_PASSWORD;
-    const QByteArray auth = QByteArray("source:") + password;
+    // matching Icecast's own "HTTP/1.0 200 OK"-style reply. The key is the
+    // password, so it never shows in a header Icecast publishes.
+    const QString &channel = m_channel;
+    const QByteArray auth = QByteArray("source:") + m_key.toUtf8();
     QByteArray request;
     request += "PUT /" + channel.toUtf8() + " HTTP/1.0\r\n";
     request += "Authorization: Basic " + auth.toBase64() + "\r\n";
@@ -173,32 +218,22 @@ void IcecastBroadcaster::sendIcecastHandshake(const QString &channel, const QStr
     // Latin-1's range so this covers them; characters outside it (e.g.
     // š/ž) would still come through as '?' - a real limitation of the ICY
     // header protocol itself, not fixable client-side.
-    request += "ice-name: " + name.toLatin1() + "\r\n";
-    request += "ice-description: " + description.toLatin1() + "\r\n";
+    request += "ice-name: " + m_name.toLatin1() + "\r\n";
+    request += "ice-description: " + m_description.toLatin1() + "\r\n";
     request += QByteArray("ice-genre: ") + ICE_GENRE + "\r\n";
     // ice-url is formed by the server as host:port/<this value> - pass just
     // the mountpoint (channel), not a separate homepage URL, so listeners
     // land on the stream itself (e.g. http://185.169.69.8:8001/user1).
     request += "ice-url: " + channel.toUtf8() + "\r\n";
     // ice-audio-info repurposed as a carrier for BroadcastPage.qml's "Send
-    // notification"/"Save stream" checkboxes through to
-    // icecast_on_connect.sh - confirmed via a live status-json.xsl capture
-    // that Icecast parses this header's semicolon-separated key=value pairs
-    // and hoists *any* key (not just its own recognized ones like bitrate/
-    // samplerate/channels) into its own top-level field on the source
-    // object, e.g. {"audio_info":"save_stream=1", "save_stream":1, ...}.
-    // ice-public was tried first for send_notification but doesn't survive
-    // into status-json.xsl at all here (no <directory> block configured -
-    // the "public" field is simply absent from the JSON), so both flags
-    // live here instead. See the Q_INVOKABLE startBroadcast() doc comment
-    // in icecastbroadcaster.h.
-    QByteArray audioInfo = QByteArray("send_notification=") + (sendNotification ? "1" : "0")
-        + ";save_stream=" + (saveStream ? "1" : "0");
-    // access_token (project-description.md #10's author_id wiring) - only
-    // appended when present, no escaping needed since
-    // secrets.token_urlsafe()'s output is URL-safe base64 (no semicolons).
-    if (!accessToken.isEmpty())
-        audioInfo += ";access_token=" + accessToken.toUtf8();
+    // notification"/"Save stream" checkboxes - Icecast parses this header's
+    // semicolon-separated key=value pairs and hoists any key (not just its
+    // own recognized ones like bitrate/samplerate/channels) onto the
+    // source; v2in's harbor hands the header to its gate as the source
+    // connects, which keeps or deletes the session's recording by
+    // save_stream.
+    const QByteArray audioInfo = QByteArray("send_notification=") + (m_sendNotification ? "1" : "0")
+        + ";save_stream=" + (m_saveStream ? "1" : "0");
     request += "ice-audio-info: " + audioInfo + "\r\n";
     request += "\r\n";
     m_socket->write(request);
@@ -206,12 +241,7 @@ void IcecastBroadcaster::sendIcecastHandshake(const QString &channel, const QStr
 
 void IcecastBroadcaster::onSocketConnected()
 {
-    sendIcecastHandshake(m_socket->property("channel").toString(),
-                          m_socket->property("name").toString(),
-                          m_socket->property("description").toString(),
-                          m_socket->property("sendNotification").toBool(),
-                          m_socket->property("saveStream").toBool(),
-                          m_socket->property("accessToken").toString());
+    sendIcecastHandshake();
 }
 
 void IcecastBroadcaster::onSocketReadyRead()
@@ -238,8 +268,7 @@ void IcecastBroadcaster::onSocketReadyRead()
             m_pendingBody.clear();
         }
     } else {
-        emit broadcastError(QString::fromUtf8("Icecast rejected the connection: " + statusLine));
-        teardown();
+        closedByServer();
     }
 }
 
@@ -247,6 +276,10 @@ void IcecastBroadcaster::onSocketErrorOccurred()
 {
     if (!m_broadcasting)
         return;
+    if (m_socket->error() == QAbstractSocket::RemoteHostClosedError) {
+        closedByServer();
+        return;
+    }
     emit broadcastError(m_socket->errorString());
     teardown();
 }
@@ -254,7 +287,53 @@ void IcecastBroadcaster::onSocketErrorOccurred()
 void IcecastBroadcaster::onSocketDisconnected()
 {
     if (m_broadcasting)
-        teardown();
+        closedByServer();
+}
+
+// The harbor said no (any status but 200) or hung up. Before the handshake
+// that is a refusal, whose reason the harbor never says - v2in's
+// /api/live/check does. After it, v2in ended the session: its time limit,
+// a kick, a restart.
+void IcecastBroadcaster::closedByServer()
+{
+    const bool accepted = m_handshakeAccepted;
+    const bool timeIsUp = m_until && QDateTime::currentMSecsSinceEpoch() >= m_until - 5000;
+    teardown();
+    if (!accepted)
+        askWhy();
+    else if (timeIsUp)
+        emit broadcastError(tr("Time is up: v2in ended the session at its limit."));
+    else
+        emit broadcastError(tr("v2in closed the connection."));
+}
+
+void IcecastBroadcaster::askWhy()
+{
+    QNetworkRequest request(QUrl(QString::fromLatin1(V2IN_API) + "/live/check"));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    // a pool channel is asked by its own name, which this key holds
+    const QJsonObject body{{"channel", m_channel.isEmpty() ? m_target : m_channel}, {"key", m_key}};
+    m_apiReply = m_statusNam.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    m_apiReply->setProperty("target", m_target);
+    connect(m_apiReply, &QNetworkReply::finished, this, &IcecastBroadcaster::onCheckReply);
+}
+
+void IcecastBroadcaster::onCheckReply()
+{
+    auto *reply = qobject_cast<QNetworkReply *>(sender());
+    if (!reply)
+        return;
+    reply->deleteLater();
+    if (reply != m_apiReply)
+        return;
+    m_apiReply = nullptr;
+
+    const QJsonObject answer = QJsonDocument::fromJson(reply->readAll()).object();
+    const QString reason = answer.value("reason").toString();
+    if (answer.value("ok").toBool() || reason.isEmpty())
+        emit broadcastError(tr("v2in did not take the connection. Try again."));
+    else
+        emit refused(reason, answer.value("next").toString(), reply->property("target").toString());
 }
 
 void IcecastBroadcaster::onAudioReadyRead()
@@ -339,6 +418,12 @@ void IcecastBroadcaster::teardown()
 {
     m_elapsedTicker.stop();
 
+    if (m_apiReply) {
+        QNetworkReply *reply = m_apiReply;
+        m_apiReply = nullptr;
+        reply->abort();
+    }
+
     if (m_audioSource) {
         m_audioSource->stop();
         m_audioSource->deleteLater();
@@ -393,6 +478,11 @@ void IcecastBroadcaster::teardown()
         emit inputLevelChanged();
     }
 
+    if (m_until) {
+        m_until = 0;
+        emit untilChanged();
+    }
+
     if (wasBroadcasting)
         emit broadcastStateChanged();
     if (wasOnAir)
@@ -406,7 +496,7 @@ void IcecastBroadcaster::onElapsedTick()
 
 void IcecastBroadcaster::refreshOccupiedChannels()
 {
-    const QUrl url(QString("http://%1:%2/status-json.xsl").arg(QString::fromLatin1(ICECAST_HOST)).arg(ICECAST_PORT));
+    const QUrl url(QString::fromLatin1(V2IN_API) + "/now");
     QNetworkReply *reply = m_statusNam.get(QNetworkRequest(url));
     connect(reply, &QNetworkReply::finished, this, &IcecastBroadcaster::onStatusJsonReply);
 }
@@ -418,20 +508,18 @@ void IcecastBroadcaster::onStatusJsonReply()
         return;
     reply->deleteLater();
 
+    // GET /api/now: a main channel with someone live has status "live"; a
+    // pool lists its live channels under "live" (https://v2in.stream).
     QStringList occupied;
     if (reply->error() == QNetworkReply::NoError) {
         const QJsonObject root = QJsonDocument::fromJson(reply->readAll()).object();
-        const QJsonValue sourceVal = root.value("icestats").toObject().value("source");
-        // icestats.source is a single object with exactly one active
-        // source, or an array with several - same defensive single-vs-list
-        // normalization already used for Joomla's JSON:API "data" field in
-        // server/main.py's GET /articles/{id}.
-        const QJsonArray sources = sourceVal.isArray() ? sourceVal.toArray() : QJsonArray{sourceVal};
-        for (const QJsonValue &sourceValue : sources) {
-            const QString listenUrl = sourceValue.toObject().value("listenurl").toString();
-            const int lastSlash = listenUrl.lastIndexOf('/');
-            if (lastSlash >= 0)
-                occupied << listenUrl.mid(lastSlash + 1);
+        for (const QJsonValue &channel : root.value("channels").toArray()) {
+            if (channel.toObject().value("status").toString() == QStringLiteral("live"))
+                occupied << channel.toObject().value("id").toString();
+        }
+        for (const QJsonValue &pool : root.value("pools").toArray()) {
+            for (const QJsonValue &live : pool.toObject().value("live").toArray())
+                occupied << live.toObject().value("channel").toString();
         }
     }
     emit occupiedChannelsChanged(occupied);
