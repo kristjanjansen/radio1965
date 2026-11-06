@@ -85,7 +85,7 @@ ApplicationWindow {
         if (layoutPreview) {
             notificationManager.upsertEvents(DummyEvents.events);
         } else {
-            eventsApiClient.fetchEvents(playbackController.v2inBaseUrl + "/api");   // the cards are v2in's (https://v2in.stream/api/events)
+            eventsApiClient.fetchEvents(appSettings.serverUrl);
             checkContributorStatus();
         }
         if (appSettings.showInfoOnStartup) {
@@ -129,7 +129,7 @@ ApplicationWindow {
     Connections {
         target: notificationManager
         function onRefreshRequested() {
-            eventsApiClient.fetchEvents(playbackController.v2inBaseUrl + "/api");   // the cards are v2in's (https://v2in.stream/api/events)
+            eventsApiClient.fetchEvents(appSettings.serverUrl);
         }
     }
 
@@ -194,7 +194,7 @@ ApplicationWindow {
                     if (layoutPreview) {
                         notificationManager.upsertEvents(DummyEvents.events);
                     } else {
-                        eventsApiClient.fetchEvents(playbackController.v2inBaseUrl + "/api");   // the cards are v2in's (https://v2in.stream/api/events)
+                        eventsApiClient.fetchEvents(appSettings.serverUrl);
                         checkContributorStatus();
                     }
                 }
