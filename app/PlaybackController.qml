@@ -26,11 +26,38 @@ QtObject {
     // separately below, same as liveStreamUrl/videoStreamLive.
     readonly property string radio1965StreamUrl: "https://v2in.stream/stream/radio1965"
 
-    // Fixed mount list, same as BroadcastPage.qml's channelNames (plus
-    // "live", listenable by everyone even though only managers can
-    // broadcast to it - see BroadcastPage.qml's isManager gate), plus
-    // "video" for the main HLS stream (liveStreamUrl).
-    readonly property var channelOptions: ["radio1965", "live", "user1", "user2", "user3", "user4", "video"]
+    // The channels are v2in's (https://v2in.stream), as its GET /api/now lists them (today radio1965, kcmd and
+    // live), so a channel added there needs no app release; radio1965 alone until the first answer. The same answer
+    // says what each one plays now (title, by, a date; who is live; silent during an air-raid alert in Kyiv), read
+    // every 10 s while one plays and every minute otherwise, never while the app is in the background. A tapped
+    // livestream card still plays its own url (playMedia), wherever it is.
+    readonly property string v2inBaseUrl: "https://v2in.stream"
+    property var v2inNow: null
+    readonly property var channelOptions: root.v2inNow ? root.v2inNow.channels.map(c => c.id) : ["radio1965"]
+    function isV2inChannel(channel) {
+        return root.channelOptions.indexOf(channel) !== -1;
+    }
+    function v2inChannel(channel) {
+        return root.v2inNow ? (root.v2inNow.channels.find(c => c.id === channel) || null) : null;
+    }
+    function refreshV2inNow() {
+        const xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState !== XMLHttpRequest.DONE || xhr.status !== 200)
+                return;
+            try { root.v2inNow = JSON.parse(xhr.responseText); } catch (e) { return; }
+            root.refreshLiveInfo();
+        };
+        xhr.open("GET", root.v2inBaseUrl + "/api/now");
+        xhr.send();
+    }
+    property Timer _v2inTimer: Timer {
+        interval: root.isLive && root.isV2inChannel(root.selectedChannel) ? 10000 : 60000
+        repeat: true
+        triggeredOnStart: true
+        running: Qt.application.state === Qt.ApplicationActive
+        onTriggered: root.refreshV2inNow()
+    }
 
     // Which channels currently have a source connected - reuses
     // icecastBroadcaster's existing status-json.xsl fetch/parse
@@ -88,6 +115,9 @@ QtObject {
     }
 
     function isChannelStreaming(channel) {
+        const c = root.v2inChannel(channel);
+        if (c)
+            return c.status !== "offline";
         if (channel === "video")
             return root.videoStreamLive;
         if (channel === "radio1965")
@@ -203,6 +233,15 @@ QtObject {
         // tapped livestream card - otherwise the selected channel) - not
         // just root.selectedChannel, so this stays correct for both entry
         // points into live playback.
+        // a v2in channel says itself what it plays (GET /api/now): the show or the file, by whom, a date apart; the
+        // raid's line while it is silent
+        const v2in = root.mediaUrl ? null : root.v2inChannel(root.selectedChannel);
+        if (v2in && v2in.status !== "offline" && (v2in.title || v2in.by)) {
+            root.liveInfo = { title: [v2in.by, v2in.title].filter(Boolean).join(" - "),
+                              summary: v2in.status === "silent" ? qsTr("Silent until the alert ends")
+                                     : v2in.status === "live" ? qsTr("Live on v2in") : (v2in.date || "") };
+            return;
+        }
         const liveUrl = root.mediaUrl || root.channelUrl(root.selectedChannel);
         const info = notificationManager.findLiveStream(liveUrl);
         root.liveInfo = (info && info.title) ? info : null;
@@ -216,11 +255,7 @@ QtObject {
     }
 
     function channelUrl(channel) {
-        if (channel === "video")
-            return root.liveStreamUrl;
-        if (channel === "radio1965")
-            return "https://v2in.stream/stream/radio1965";
-        return "http://live.uuu.ee:8001/" + channel;
+        return root.v2inBaseUrl + "/stream/" + channel;
     }
 
     // Called by PlayerBar's channel ComboBox onActivated (a real user pick,

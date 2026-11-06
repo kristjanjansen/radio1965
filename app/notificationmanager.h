@@ -65,7 +65,9 @@ public:
     // proxy models end up with the right rows/data (confirmed via direct
     // data() calls and via Repeater, which isn't affected) but ListView
     // delegates for those rows get created with no `model` context at all.
-    Q_INVOKABLE void upsertEvents(const QJsonArray &events);
+    // source: whose cards these are ("" this server, "v2in" v2in.stream, whose ids start "v2in_"); only that
+    // source's cards absent from the answer are dropped, so two feeds never prune each other.
+    Q_INVOKABLE void upsertEvents(const QJsonArray &events, const QString &source = QString());
 
     // Called from the Android JNI / iOS bridges whenever a push arrives
     // (foreground, background, or a notification tap) - title/summary/data
