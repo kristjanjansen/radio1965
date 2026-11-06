@@ -49,30 +49,26 @@ ApplicationWindow {
         id: appSettings
         property string serverUrl: "https://live.uuu.ee/radio1965/api"
         property bool showInfoOnStartup: true
-        // contributor/index.html - register/login/forgot-password page
-        // embedded by contributorDialog's WebView below.
-        property string contributorWebUrl: "https://eccm.ee/radio1965/contributor/"
         // editor/index.html - opened externally by "Share a gem" below,
         // with userSettings.accessToken appended so the user lands there
         // already logged in (editor/index.html's ?token= handling).
         property string editorWebUrl: "https://eccm.ee/radio1965/editor/"
     }
 
-    // "Become a Contributor" gate (project-description.md #10) - role is
-    // "none"/"pending"/"contributor"/"temporaryContributor"/"manager", or
-    // "banned" - see bannedDialog below for that last one.
+    // An account of this app's server (project-description.md #10), made
+    // on its own web pages since signing up and logging in left the app -
+    // role is "none"/"pending"/"contributor"/"manager", or "banned" - see
+    // bannedDialog below for that last one. Broadcasting needs none of it:
+    // that takes a stream key from v2in (BroadcastPage.qml).
     Settings {
         id: userSettings
         category: "User"
-        // layout preview: start as temporaryContributor to expose the broadcast screen
-        property string role: layoutPreview ? "temporaryContributor" : "none"
+        property string role: "none"
         property string contributorName: ""
         property string contributorEmail: ""
-        // Opaque per-account secret from POST /contributors/register -
-        // doubles as the credential for checkContributorStatus()'s
-        // GET /contributors/status calls. Only ever set for the permanent
-        // "Become a Contributor" flow (#10.2) - temporaryContributor
-        // (#10.1) has no account/token of its own.
+        // Opaque per-account secret, set by the in-app sign-up and login
+        // of earlier versions - doubles as the credential for
+        // checkContributorStatus()'s GET /contributors/status calls.
         property string accessToken: ""
     }
 
@@ -99,8 +95,7 @@ ApplicationWindow {
     // clicks the emailed confirmation link) and a later ban - the doc's
     // own suggested sync point, "on Refresh events" (called from both here
     // and the header's refresh button below), plus on startup. A no-op
-    // whenever there's no account to check (no token - "none" and
-    // "temporaryContributor" never have one).
+    // whenever there's no account to check (no token).
     function checkContributorStatus() {
         if (!userSettings.accessToken)
             return;
@@ -248,31 +243,6 @@ ApplicationWindow {
 
 
                 MenuItem {
-                    text: qsTr("Become a Contributor / Log in")
-                    // Was `!== "contributor"` - now also hidden while
-                    // "pending" (see the Label just below) and while
-                    // already "manager". Still offered for
-                    // temporaryContributor, so upgrading to a real account
-                    // is possible. One entry covers both register and
-                    // login - contributor/index.html's own views handle
-                    // that split (project-description.md #10's "Become a
-                    // contributor/Log in" TODO).
-                    visible: userSettings.role === "none" || userSettings.role === "temporaryContributor"
-                    onTriggered: {
-                        contributorDialog.open()
-                        drawer.close()
-                    }
-                }
-
-                Label {
-                    text: qsTr("Registration pending - check your email")
-                    visible: userSettings.role === "pending"
-                    wrapMode: Text.Wrap
-                    Layout.fillWidth: true
-                    opacity: 0.8
-                }
-
-                MenuItem {
                     text: qsTr("Share a gem")
                     // project-description.md #10's "Share a gem" action -
                     // opens editor/index.html in the system browser
@@ -287,19 +257,6 @@ ApplicationWindow {
                     visible: userSettings.role === "contributor" || userSettings.role === "manager"
                     onTriggered: {
                         Qt.openUrlExternally(appSettings.editorWebUrl + "?token=" + encodeURIComponent(userSettings.accessToken))
-                        drawer.close()
-                    }
-                }
-
-                MenuItem {
-                    text: qsTr("Temporary contributor")
-                    // Hidden once you're already either kind of contributor -
-                    // "Become a Contributor" above stays offered even as a
-                    // temporaryContributor, so upgrading later is still
-                    // possible; this one has nothing left to offer then.
-                    visible: userSettings.role === "none"
-                    onTriggered: {
-                        temporaryContributorDialog.open()
                         drawer.close()
                     }
                 }
@@ -460,8 +417,8 @@ ApplicationWindow {
         standardButtons: Dialog.Close
         // Dialog doesn't auto-size itself from an explicit `width:` set on
         // an inner child (that only ever controls the ColumnLayout's own
-        // width, not the Dialog's actual content-area/frame) - same fix as
-        // contributorDialog below: the width has to go on the Dialog itself.
+        // width, not the Dialog's actual content-area/frame) - the width
+        // has to go on the Dialog itself.
         width: Math.min(app.width - 40, 420)
 
         // Only true when this dialog was auto-opened at startup (see
@@ -511,240 +468,16 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
         }
     }
 
-    Dialog {
-        id: contributorDialog
-        title: qsTr("Become a Contributor / Log in")
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Cancel
-        // A mid-register/login tap on the surrounding dimmed area is easy to
-        // trigger by accident on a phone - only Cancel/Back (or the embedded
-        // page completing) should close this, not an outside tap.
-        closePolicy: Popup.CloseOnEscape
-        // Dialog doesn't auto-size itself from an explicit `width:` set on
-        // an inner child - same fix as infoDialog above. Taller than the
-        // other dialogs here since it now hosts a full web page rather
-        // than a few fields.
-        width: Math.min(app.width - 40, 480)
-        height: Math.min(app.height - 80, 640)
-
-        property bool loading: true
-
-        // Reload the page fresh on every open - including after a
-        // previous attempt handed off a result - so it always starts back
-        // at the register view.
-        onOpened: {
-            contributorDialog.loading = true
-            // "?embed=app" tells contributor/index.html to hand its result
-            // back via the "?action=result&data=" navigation below instead of
-            // redirecting to the editor page (which only makes sense for a
-            // standalone browser visit).
-            // "&t=" cache-buster: eccm.ee sends no Cache-Control, so iOS's
-            // WKWebView could keep serving an older cached copy of the page
-            // (heuristic caching off Last-Modified) after it's redeployed.
-            contributorWebView.url = appSettings.contributorWebUrl + "?embed=app&t=" + Date.now()
-        }
-
-        // contributor/index.html (register/login/forgot-password) embedded
-        // via WebView instead of native fields - project-description.md
-        // #10's "Become a contributor/Log in" TODO, plus "also on the web".
-        // QtWebView has no JS bridge (unlike WebEngine's WebChannel), so
-        // the page hands results back via a real navigation to
-        // "?action=result&data=<json>" on itself, caught below via
-        // onLoadingChanged's LoadStartedStatus (loadRequest.url, not
-        // contributorWebView.url - the request is observed as it starts,
-        // before the new page even loads). Was a same-document
-        // "#result=..." hash change instead, with no real navigation at
-        // all - worked on Android/desktop but never reliably reached
-        // onUrlChanged on iOS's WKWebView backend (confirmed: login
-        // worked on Android/Linux, silently did nothing on iOS). A real
-        // navigation forces every backend's navigation-lifecycle
-        // callbacks to fire, which is what onLoadingChanged already
-        // depends on for the loading indicator below regardless.
-        WebView {
-            id: contributorWebView
-            anchors.fill: parent
-            visible: !contributorDialog.loading
-
-            // Checked on every loading status and on urlChanged, not just
-            // LoadStartedStatus: which callback carries the result URL
-            // differs per backend - on iOS (WKWebView) LoadStarted can still
-            // report the previous URL, while LoadSucceeded and urlChanged
-            // only fire once the result page has committed.
-            function handleResultUrl(url) {
-                const urlString = url.toString();
-                const marker = "action=result&data=";
-                const index = urlString.indexOf(marker);
-                if (index === -1)
-                    return;
-                try {
-                    handleResultPayload(JSON.parse(decodeURIComponent(urlString.substring(index + marker.length))));
-                } catch (e) {
-                    console.warn("[contributorDialog] bad result payload:", e, urlString);
-                }
-            }
-
-            function handleResultPayload(payload) {
-                if (!payload || !contributorDialog.opened)
-                    return;
-                userSettings.role = payload.role;
-                userSettings.accessToken = payload.token;
-                if (payload.name)
-                    userSettings.contributorName = payload.name;
-                if (payload.email)
-                    userSettings.contributorEmail = payload.email;
-                contributorDialog.close();
-            }
-
-            // Extra channel alongside the URL checks: contributor/index.html
-            // also puts the result into document.title as
-            // "radio65-result:<json>", and Qt's iOS (WKWebView) backend
-            // reliably reports every title change. (runJavaScript() polling
-            // was tried first and crashed on iOS.)
-            onTitleChanged: {
-                const marker = "radio65-result:";
-                const t = contributorWebView.title;
-                if (!t || !t.startsWith(marker))
-                    return;
-                try {
-                    handleResultPayload(JSON.parse(t.substring(marker.length)));
-                } catch (e) {
-                    console.warn("[contributorDialog] bad result title:", e, t);
-                }
-            }
-
-            onLoadingChanged: function(loadRequest) {
-                if (loadRequest.status !== WebView.LoadStartedStatus)
-                    contributorDialog.loading = false
-                handleResultUrl(loadRequest.url)
-            }
-
-            onUrlChanged: {
-                handleResultUrl(contributorWebView.url)
-            }
-        }
-
-        BusyIndicator {
-            anchors.centerIn: parent
-            running: contributorDialog.loading
-            visible: running
-        }
-    }
-
-    Dialog {
-        id: temporaryContributorDialog
-        title: qsTr("Temporary contributor")
-        modal: true
-        anchors.centerIn: parent
-        standardButtons: Dialog.Cancel
-        // Same reasoning as contributorDialog above - width has to go on
-        // the Dialog itself, not an inner child.
-        width: Math.min(app.width - 40, 420)
-        // Same reasoning as contributorDialog above - an accidental outside
-        // tap while typing a name/password shouldn't dismiss this, but
-        // Cancel/Back still should.
-        closePolicy: Popup.CloseOnEscape
-
-        property string errorMessage: ""
-        property bool verifying: false
-
-        // Same reasoning as contributorDialog's onOpened above.
-        onOpened: {
-            tempNameField.text = ""
-            tempPasswordField.text = ""
-            temporaryContributorDialog.errorMessage = ""
-            temporaryContributorDialog.verifying = false
-        }
-
-        // Checked server-side, not locally (project-description.md #10.1
-        // item 1 is explicit about this - unlike contributorDialog's still-
-        // placeholder "1965" check above) against
-        // config.TEMPORARY_CONTRIBUTOR_PASSWORD_PATH, a plain-text file an
-        // admin can edit directly on the server - see server/main.py's
-        // verify_temporary_contributor_password(). Plain XMLHttpRequest
-        // here rather than routing through EventsApiClient (C++): this is
-        // the only place in the app that needs a one-off POST, so adding a
-        // whole C++ method (+ rebuild) for it isn't worth it.
-        function submit() {
-            temporaryContributorDialog.errorMessage = "";
-            temporaryContributorDialog.verifying = true;
-            const xhr = new XMLHttpRequest();
-            xhr.open("POST", appSettings.serverUrl + "/temporary-contributor/verify");
-            xhr.setRequestHeader("Content-Type", "application/json");
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState !== XMLHttpRequest.DONE)
-                    return;
-                temporaryContributorDialog.verifying = false;
-                if (xhr.status === 200) {
-                    userSettings.role = "temporaryContributor";
-                    userSettings.contributorName = tempNameField.text;
-                    temporaryContributorDialog.close();
-                } else if (xhr.status === 403) {
-                    temporaryContributorDialog.errorMessage = qsTr("Incorrect password.");
-                } else {
-                    temporaryContributorDialog.errorMessage = qsTr("Could not reach the server. Try again later.");
-                }
-            };
-            xhr.send(JSON.stringify({ password: tempPasswordField.text }));
-        }
-
-        ColumnLayout {
-            spacing: 8
-            width: temporaryContributorDialog.availableWidth
-
-            // No email field - project-description.md #10.1 item 1
-            // explicitly says temporary contributors don't need to give one.
-            TextField {
-                id: tempNameField
-                Layout.fillWidth: true
-                enabled: !temporaryContributorDialog.verifying
-                placeholderText: qsTr("Name")
-            }
-
-            TextField {
-                id: tempPasswordField
-                Layout.fillWidth: true
-                enabled: !temporaryContributorDialog.verifying
-                placeholderText: qsTr("Password")
-                echoMode: TextInput.Password
-            }
-
-            Label {
-                text: temporaryContributorDialog.errorMessage
-                color: "crimson"
-                visible: text !== ""
-            }
-
-            RowLayout {
-                Layout.alignment: Qt.AlignHCenter
-                spacing: 8
-
-                BusyIndicator {
-                    implicitWidth: 20
-                    implicitHeight: 20
-                    running: temporaryContributorDialog.verifying
-                    visible: running
-                }
-
-                Button {
-                    text: qsTr("Submit")
-                    enabled: !temporaryContributorDialog.verifying
-                    onClicked: temporaryContributorDialog.submit()
-                }
-            }
-        }
-    }
-
     // Tester feedback, emailed by the server's POST /feedback.
     Dialog {
         id: feedbackDialog
         title: qsTr("Send Feedback")
         modal: true
         standardButtons: Dialog.Cancel
-        // Same reasoning as contributorDialog above - width has to go on
+        // Same reasoning as infoDialog above - width has to go on
         // the Dialog itself, not an inner child.
         width: Math.min(app.width - 40, 420)
-        // Same reasoning as contributorDialog above - an accidental outside
+        // An accidental outside
         // tap while typing feedback shouldn't dismiss (and discard) it, but
         // Cancel/Back still should.
         closePolicy: Popup.CloseOnEscape
