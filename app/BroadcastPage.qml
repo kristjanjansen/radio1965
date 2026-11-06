@@ -5,10 +5,10 @@ import QtQuick.Layouts
 
 // Lets a contributor, temporary contributor or manager go live on v2in
 // (https://v2in.stream), broadcasting microphone audio via
-// IcecastBroadcaster (app/icecastbroadcaster.h/.cpp). Contributors and
-// temporary contributors go to the pool "community", which v2in claims a
-// free channel of first; managers also to "live", straight to the harbor.
-// The harbor password is the login's access_token, or the temporary
+// IcecastBroadcaster (app/icecastbroadcaster.h/.cpp). Where it may go is
+// v2in's to say (POST /api/live/check { key }, its "may"): a pool such as
+// "community" is claimed first, a channel such as "live" taken straight at
+// the harbor. The harbor password is the login's access_token, or the temporary
 // contributor password; v2in checks it with this app's server and refuses
 // with a reason worded here. Desktop and Android only: that C++ object is
 // only registered as context property "icecastBroadcaster" when
@@ -29,19 +29,31 @@ Item {
     // - only for wording: v2in itself limits a temporary contributor to 3
     // minutes, and the claim's "until" shows the time left.
     property bool isTemporaryContributor: false
-    // Passed in from Main.qml (userSettings.role === "manager") - offers
-    // "live" below. v2in refuses it to anyone else in any case.
-    property bool isManager: false
     // Passed in from Main.qml: userSettings.accessToken, or for a temporary
     // contributor the password they typed (userSettings.temporaryPassword).
     // Sent only as the harbor password and in the claim, never in
     // published metadata.
     property string key: ""
-    // { id, name, pool } for the ComboBox below.
-    readonly property var targets: root.isManager
-        ? [{ id: "community", name: "community", pool: true }, { id: "live", name: "live", pool: false }]
-        : [{ id: "community", name: "community", pool: true }]
+    // { id, name, pool } for the ComboBox below: v2in's "may" for this key
+    // (IcecastBroadcaster.refreshDestinations), empty until it answers.
+    property var targets: []
+    // Why targets is empty once v2in answered: its refusal of the key, or
+    // "no answer"; "" while asking or when there are targets.
+    property string destinationsReason: ""
+    property bool destinationsAsked: false
     property string errorMessage: ""
+
+    function refreshDestinations() {
+        if (!root.broadcastAvailable || !root.isContributor || root.key === "")
+            return;
+        root.destinationsAsked = false;
+        icecastBroadcaster.refreshDestinations(root.key);
+    }
+    onKeyChanged: root.refreshDestinations()
+    onIsContributorChanged: root.refreshDestinations()
+    Component.onCompleted: root.refreshDestinations()
+    // asked again on opening the tab, so a role changed since is seen
+    SwipeView.onIsCurrentItemChanged: if (SwipeView.isCurrentItem) root.refreshDestinations()
 
     function targetName(id) {
         const t = root.targets.find(x => x.id === id);
@@ -57,6 +69,9 @@ Item {
         case "unknown key": return root.isTemporaryContributor
                                    ? qsTr("The temporary contributor password is not accepted. Enter the current one from the menu.")
                                    : qsTr("v2in did not accept your contributor login.");
+        case "account not confirmed yet": return qsTr("Your contributor account is not confirmed yet. Open the link in the email you were sent.");
+        case "banned": return qsTr("This account may not broadcast.");
+        case "no answer": return qsTr("Could not reach v2in. Try again later.");
         case "revoked": return qsTr("Your broadcasting access no longer works.");
         case "kicked": return qsTr("Your broadcast was stopped by v2in's admins.");
         case "expired": return qsTr("Your broadcasting access has expired.");
@@ -71,7 +86,11 @@ Item {
         case "time is up": return at ? qsTr("Your time is up. Try again at %1.").arg(at)
                                      : qsTr("Your time is up.");
         case "too many tries": return qsTr("Too many wrong tries. Wait a minute and try again.");
-        default: return qsTr("v2in refused: %1").arg(reason);
+        default:
+            // "cannot reach live.uuu.ee to check this login", the host named
+            if (reason.indexOf("cannot reach") === 0)
+                return qsTr("v2in cannot check your login with this app's server right now. Try again in a minute.");
+            return qsTr("v2in refused: %1").arg(reason);
         }
     }
 
@@ -97,6 +116,11 @@ Item {
         // rejects a connect attempt to an already-occupied channel).
         function onBroadcastError(message) { root.errorMessage = message; }
         function onRefused(reason, next, target) { root.errorMessage = root.refusalText(reason, next, target); }
+        function onDestinationsChanged(may, reason) {
+            root.targets = may;
+            root.destinationsReason = reason;
+            root.destinationsAsked = true;
+        }
     }
 
     Label {
@@ -144,7 +168,8 @@ Item {
                 category: "Broadcast"
                 property string name: ""
                 property string description: ""
-                property string lastChannel: "community"
+                // the last destination chosen, used only while it is in may
+                property string lastChannel: ""
                 property bool sendNotification: true
                 property bool saveStream: true
                 property real gain: 1.0
@@ -168,10 +193,20 @@ Item {
                 text: qsTr("Enter the temporary contributor password again from the menu to broadcast.")
             }
 
+            Label {
+                Layout.fillWidth: true
+                visible: !icecastBroadcaster.broadcasting && root.key !== "" && root.targets.length === 0
+                wrapMode: Text.Wrap
+                color: root.destinationsAsked ? "crimson" : Material.foreground
+                text: !root.destinationsAsked ? qsTr("Asking v2in where you may go live.")
+                      : root.destinationsReason !== "" ? root.refusalText(root.destinationsReason, "", "")
+                      : qsTr("v2in offers you nowhere to go live now.")
+            }
+
             ComboBox {
                 id: channelCombo
                 Layout.fillWidth: true
-                visible: !icecastBroadcaster.broadcasting
+                visible: !icecastBroadcaster.broadcasting && root.targets.length > 0
                 enabled: !icecastBroadcaster.broadcasting
                 model: root.targets
                 textRole: "name"

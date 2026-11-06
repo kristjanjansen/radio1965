@@ -1227,7 +1227,6 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
                     // app's server: the account's token, or the temporary
                     // contributor password. Never sent in ice-audio-info.
                     key: userSettings.role === "temporaryContributor" ? userSettings.temporaryPassword : userSettings.accessToken
-                    isManager: userSettings.role === "manager"
                 }
 
 

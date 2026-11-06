@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QStringList>
 #include <QTimer>
+#include <QVariantList>
 
 struct lame_global_struct;
 typedef struct lame_global_struct lame_global_flags;
@@ -85,6 +86,11 @@ public:
     // channel choices in the UI), not a hard gate on broadcasting.
     Q_INVOKABLE void refreshOccupiedChannels();
 
+    // Where this key may go live, as v2in says: POST /api/live/check
+    // { key } with no channel or pool answers may: [{ id, name, pool }],
+    // reported via destinationsChanged(). The app names no destination.
+    Q_INVOKABLE void refreshDestinations(const QString &key);
+
 signals:
     void broadcastStateChanged();
     void onAirChanged();
@@ -98,6 +104,10 @@ signals:
     // full", "cooldown", ...), next when it may work (ISO time, or empty),
     // target the channel or pool asked for. BroadcastPage.qml words it.
     void refused(const QString &reason, const QString &next, const QString &target);
+    // may: refreshDestinations()'s answer, each { id, name, pool }; empty
+    // with reason when v2in refuses the key ("unknown key", "banned", ...)
+    // or "no answer" when v2in could not be reached.
+    void destinationsChanged(const QVariantList &may, const QString &reason);
 
 private slots:
     void onSocketConnected();
@@ -109,6 +119,7 @@ private slots:
     void onStatusJsonReply();
     void onClaimReply();
     void onCheckReply();
+    void onMayReply();
 
 private:
     // startBroadcast() once the microphone may be used: the claim, or the
@@ -127,6 +138,8 @@ private:
     QNetworkAccessManager m_statusNam;
     // The claim or check in flight, aborted by teardown()/a new start.
     QNetworkReply *m_apiReply = nullptr;
+    // refreshDestinations()'s check in flight; a newer one replaces it.
+    QNetworkReply *m_mayReply = nullptr;
 
     // This session, kept from startBroadcast() for the claim's answer and
     // the handshake: m_channel is the mount (the pool's pick for a pool).

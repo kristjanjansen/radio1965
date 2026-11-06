@@ -13,6 +13,7 @@
 #include <QNetworkRequest>
 #include <QTcpSocket>
 #include <QUrl>
+#include <QVariantMap>
 #include <QVarLengthArray>
 #include <qpermissions.h>
 
@@ -500,6 +501,52 @@ void IcecastBroadcaster::teardown()
 void IcecastBroadcaster::onElapsedTick()
 {
     emit elapsedSecondsChanged();
+}
+
+void IcecastBroadcaster::refreshDestinations(const QString &key)
+{
+    if (m_mayReply) {
+        QNetworkReply *older = m_mayReply;
+        m_mayReply = nullptr;
+        older->abort();
+    }
+    QNetworkRequest request(QUrl(QString::fromLatin1(V2IN_API) + "/live/check"));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setTransferTimeout(API_TIMEOUT_MS);
+    const QJsonObject body{{"key", key.trimmed()}};
+    m_mayReply = m_statusNam.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    connect(m_mayReply, &QNetworkReply::finished, this, &IcecastBroadcaster::onMayReply);
+}
+
+void IcecastBroadcaster::onMayReply()
+{
+    auto *reply = qobject_cast<QNetworkReply *>(sender());
+    if (!reply)
+        return;
+    reply->deleteLater();
+    // replaced by a newer check (aborted above)
+    if (reply != m_mayReply)
+        return;
+    m_mayReply = nullptr;
+
+    const QJsonObject answer = reply->isOpen() ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject();
+    if (answer.isEmpty()) {
+        emit destinationsChanged({}, QStringLiteral("no answer"));
+        return;
+    }
+    if (!answer.value("ok").toBool()) {
+        emit destinationsChanged({}, answer.value("reason").toString());
+        return;
+    }
+    QVariantList may;
+    for (const QJsonValue &d : answer.value("may").toArray()) {
+        const QJsonObject o = d.toObject();
+        const QString id = o.value("id").toString();
+        if (id.isEmpty())
+            continue;
+        may << QVariantMap{{"id", id}, {"name", o.value("name").toString(id)}, {"pool", o.value("pool").toBool()}};
+    }
+    emit destinationsChanged(may, QString());
 }
 
 void IcecastBroadcaster::refreshOccupiedChannels()
