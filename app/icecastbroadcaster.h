@@ -22,8 +22,8 @@ class QTcpSocket;
 // QAudioSource -> libmp3lame -> a hand-rolled Icecast HTTP-source client
 // over QTcpSocket. The password is the broadcaster's key: a contributor's
 // or manager's access_token from this app's login, or the temporary
-// contributor password; a pool (e.g. "community") is first claimed over
-// v2in's API, which answers with the pool channel to connect to. v2in
+// contributor password; a channel of several streamers (e.g. "community")
+// is first claimed over v2in's API, which answers with the slot to connect to. v2in
 // checks the key with this app's server. Built on Desktop
 // and Android (see app/CMakeLists.txt's RADIO65_ENABLE_BROADCAST gate,
 // which cross-compiles libmp3lame via the NDK on Android) - registered as
@@ -63,9 +63,10 @@ public:
     void setGain(qreal gain);
     qint64 until() const { return m_until; }
 
-    // target: a main channel of v2in (e.g. "live", the mount the key is
-    // sent to) or, with pool set, a pool (e.g. "community"): then
-    // POST /api/live/claim { pool, key, keep } first, and the channel it
+    // target: a channel of v2in (e.g. "live", the mount the key is sent
+    // to) or, with pool set, a channel of several streamers (e.g.
+    // "community"): then POST /api/live/claim { channel, key, keep } first,
+    // and the slot it
     // answers with is the mount, held for this key 60 s. A refusal (the
     // claim's, or the harbor's, asked again at /api/live/check for its
     // reason) comes back as refused(). key: the access_token, or the
@@ -87,7 +88,8 @@ public:
     Q_INVOKABLE void refreshOccupiedChannels();
 
     // Where this key may go live, as v2in says: POST /api/live/check
-    // { key } with no channel or pool answers may: [{ id, name, pool }],
+    // { key } with no channel answers may: [{ id, name, live }] (live: how
+    // many may stream there at once; pool below is live over 1),
     // reported via destinationsChanged(). The app names no destination.
     Q_INVOKABLE void refreshDestinations(const QString &key);
 

@@ -34,46 +34,51 @@ QtObject {
     // livestream card still plays its own url (playMedia), wherever it is.
     readonly property string v2inBaseUrl: "https://v2in.stream"
     property var v2inNow: null
-    // Pools (GET /api/now's pools, e.g. community) are listed as v2in's front page shows them, by name and never by
-    // their channels (community1, ...): with nobody live, the pool itself, which does not play and says "Nobody live
-    // now" or the raid's line; with someone live, one entry per show, "<pool>: <show>", each playing its own channel.
+    // A channel of several streamers (its live a list in GET /api/now's channels, e.g. community) is listed as v2in's
+    // front page shows it, by name and never by its slots (community-1, ...): mixed and playing (it has a stream), the
+    // channel itself, playing its mix; unmixed with someone live, one entry per show, "<name>: <show>", each playing its
+    // own slot; otherwise the channel itself, which does not play and says "Nobody live now" or the raid's line.
     readonly property var channelOptions: root.v2inNow
-        ? root.v2inNow.channels.map(c => c.id).concat((root.v2inNow.pools || []).reduce(
-              (all, p) => all.concat(p.live && p.live.length ? p.live.map(l => l.channel) : [p.id]), []))
+        ? root.v2inNow.channels.reduce((all, c) => all.concat(root._isSeveral(c) && !c.stream && c.live.length
+              ? c.live.map(l => l.channel) : [c.id]), [])
         : []
     function isV2inChannel(channel) {
         return root.channelOptions.indexOf(channel) !== -1;
     }
-    // { pool, live } for a pool's id (live null) or one of its live channels, in `now` (an /api/now answer)
+    function _isSeveral(c) {
+        return Array.isArray(c.live);
+    }
+    // { pool, live } for a channel of several by its id (live null) or one of its live slots, in `now` (an /api/now
+    // answer); null for any other
     function _poolEntry(channel, now) {
-        for (const p of (now && now.pools) || []) {
+        for (const p of ((now && now.channels) || []).filter(c => root._isSeveral(c))) {
             if (p.id === channel)
                 return { pool: p, live: null };
-            const l = (p.live || []).find(x => x.channel === channel);
+            const l = p.live.find(x => x.channel === channel);
             if (l)
                 return { pool: p, live: l };
         }
         return null;
     }
-    // A main channel as /api/now gives it; a pool's entry in the same shape (status "offline" for a pool nobody is
-    // live on, so it is not offered to play)
+    // A channel of one as /api/now gives it; a channel of several, or one of its shows, in the same shape (status
+    // "offline" for one that has nothing to play, so it is not offered to play; live the list of who is in a mix)
     function v2inChannel(channel) {
         if (!root.v2inNow)
             return null;
-        const c = root.v2inNow.channels.find(x => x.id === channel);
-        if (c)
-            return c;
         const e = root._poolEntry(channel, root.v2inNow);
         if (!e)
-            return null;
-        return e.live
-            ? { id: channel, name: e.pool.name, pool: true, status: e.pool.status === "silent" ? "silent" : "live",
-                title: e.live.title, by: e.live.artist, live: e.live }
-            : { id: channel, name: e.pool.name, pool: true, status: "offline", title: "", by: "", live: null,
-                silence: e.pool.silence };
+            return root.v2inNow.channels.find(x => x.id === channel) || null;
+        if (e.live)
+            return { id: channel, name: e.pool.name, pool: true, status: e.pool.status === "silent" ? "silent" : "live",
+                     title: e.live.title, by: e.live.artist, live: e.live };
+        if (e.pool.stream)
+            return { id: channel, name: e.pool.name, pool: true, status: e.pool.status, title: e.pool.title, by: e.pool.by,
+                     date: e.pool.date, live: e.pool.live };
+        return { id: channel, name: e.pool.name, pool: true, status: e.pool.status === "silent" ? "silent" : "offline",
+                 title: "", by: "", live: null, silence: e.pool.status === "silent" ? e.pool.title : "" };
     }
-    // What PlayerBar's channel picker shows: a main channel's id, as before; a pool's name, with its show, or with
-    // "Nobody live now" or the raid's line
+    // What PlayerBar's channel picker shows: a channel of one's id, as before; a channel of several by its name, with
+    // its show (or who is in its mix), or with "Nobody live now" or the raid's line
     function channelLabel(channel) {
         const c = root.v2inChannel(channel);
         if (!c || !c.pool)
@@ -89,7 +94,7 @@ QtObject {
             const before = root._poolEntry(root.selectedChannel, root.v2inNow);
             try { root.v2inNow = JSON.parse(xhr.responseText); } catch (e) { return; }
             if (root.channelOptions.indexOf(root.selectedChannel) === -1) {
-                const pool = before ? (root.v2inNow.pools || []).find(p => p.id === before.pool.id) : null;
+                const pool = before ? root.v2inNow.channels.find(p => p.id === before.pool.id && root._isSeveral(p)) : null;
                 if (pool)
                     root._poolChanged(pool);
                 else
@@ -100,16 +105,17 @@ QtObject {
         xhr.open("GET", root.v2inBaseUrl + "/api/now");
         xhr.send();
     }
-    // The chosen pool entry is gone: its show ended, or someone went live on an idle pool. The pool's first live show
-    // is chosen, else the pool itself; one that was playing goes on with that show, or stops when nobody is left.
+    // The chosen entry of a channel of several is gone: its show ended, someone went live on an idle one, or its mix
+    // began or ended. Its mix is chosen while it plays, else its first live show, else the channel itself; one that was
+    // playing goes on with that, or stops when nothing is left.
     function _poolChanged(pool) {
         const playing = root.isLive && !root.mediaUrl
             && (player.playbackState !== MediaPlayer.StoppedState || root.liveStreamOffline || root.loading);
-        const next = pool.live && pool.live.length ? pool.live[0].channel : pool.id;
+        const next = !pool.stream && pool.live.length ? pool.live[0].channel : pool.id;
         root.selectedChannel = next;
         if (!playing)
             return;
-        if (next === pool.id)
+        if (next === pool.id && !pool.stream)
             root.stop();
         else
             root.start();
@@ -370,7 +376,7 @@ QtObject {
     }
 
     function start() {
-        // a pool nobody is live on has nothing to play: its line says so
+        // a channel of several with nothing to play (nobody live, no mix): its line says so
         const idle = root.isLive && !root.mediaUrl ? root.v2inChannel(root.selectedChannel) : null;
         if (idle && idle.pool && !idle.live) {
             player.stop();

@@ -6,8 +6,8 @@ import QtQuick.Layouts
 // Lets a contributor, temporary contributor or manager go live on v2in
 // (https://v2in.stream), broadcasting microphone audio via
 // IcecastBroadcaster (app/icecastbroadcaster.h/.cpp). Where it may go is
-// v2in's to say (POST /api/live/check { key }, its "may"): a pool such as
-// "community" is claimed first, a channel such as "live" taken straight at
+// v2in's to say (POST /api/live/check { key }, its "may"): a channel several
+// may stream on at once, such as "community", is claimed first, a channel such as "live" taken straight at
 // the harbor. The harbor password is the login's access_token, or the temporary
 // contributor password; v2in checks it with this app's server and refuses
 // with a reason worded here. Desktop and Android only: that C++ object is
@@ -34,7 +34,7 @@ Item {
     // Sent only as the harbor password and in the claim, never in
     // published metadata.
     property string key: ""
-    // { id, name, pool } for the ComboBox below: v2in's "may" for this key
+    // { id, name, pool } for the ComboBox below: v2in's "may" for this key (pool: live over 1)
     // (IcecastBroadcaster.refreshDestinations), empty until it answers.
     property var targets: []
     // Why targets is empty once v2in answered: its refusal of the key, or
@@ -79,8 +79,8 @@ Item {
         case "wrong channel": return qsTr("You may not broadcast on %1.").arg(name);
         case "no such channel": return qsTr("%1 is not on v2in any more.").arg(name);
         case "channel taken": return qsTr("Someone is live on %1 now.").arg(name);
-        case "pool full": return at ? qsTr("Every %1 channel is taken. Try again at %2.").arg(name).arg(at)
-                                    : qsTr("Every %1 channel is taken. Try again later.").arg(name);
+        case "pool full": return at ? qsTr("%1 is full. Try again at %2.").arg(name).arg(at)
+                                    : qsTr("%1 is full. Try again later.").arg(name);
         case "cooldown": return at ? qsTr("You were live a moment ago. Try again at %1.").arg(at)
                                    : qsTr("You were live a moment ago. Try again later.");
         case "time is up": return at ? qsTr("Your time is up. Try again at %1.").arg(at)

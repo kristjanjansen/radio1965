@@ -111,14 +111,15 @@ void IcecastBroadcaster::goLive(const QString &target, bool pool, const QString 
         return;
     }
 
-    // A pool names no channel: v2in picks a free one and holds it for this
-    // key 60 s, which openStream() connects to well within.
+    // A channel of several streamers: v2in picks a free place on it (a
+    // slot, its own mount) and holds it for this key 60 s, which
+    // openStream() connects to well within.
     QNetworkRequest request(QUrl(QString::fromLatin1(V2IN_API) + "/live/claim"));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     // a claim that never answers ends as "Could not reach v2in", not a
     // Stop button with nothing behind it
     request.setTransferTimeout(API_TIMEOUT_MS);
-    const QJsonObject body{{"pool", target}, {"key", m_key}, {"keep", saveStream}};
+    const QJsonObject body{{"channel", target}, {"key", m_key}, {"keep", saveStream}};
     m_apiReply = m_statusNam.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(m_apiReply, &QNetworkReply::finished, this, &IcecastBroadcaster::onClaimReply);
 }
@@ -319,7 +320,7 @@ void IcecastBroadcaster::askWhy()
     QNetworkRequest request(QUrl(QString::fromLatin1(V2IN_API) + "/live/check"));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setTransferTimeout(API_TIMEOUT_MS);
-    // a pool channel is asked by its own name, which this key holds
+    // a slot of a channel of several is asked by its own name, which this key holds
     const QJsonObject body{{"channel", m_channel.isEmpty() ? m_target : m_channel}, {"key", m_key}};
     m_apiReply = m_statusNam.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
     m_apiReply->setProperty("target", m_target);
@@ -544,7 +545,8 @@ void IcecastBroadcaster::onMayReply()
         const QString id = o.value("id").toString();
         if (id.isEmpty())
             continue;
-        may << QVariantMap{{"id", id}, {"name", o.value("name").toString(id)}, {"pool", o.value("pool").toBool()}};
+        // live: how many may stream there at once; over 1 a free place is claimed first
+        may << QVariantMap{{"id", id}, {"name", o.value("name").toString(id)}, {"pool", o.value("live").toInt(1) > 1}};
     }
     emit destinationsChanged(may, QString());
 }
@@ -563,18 +565,20 @@ void IcecastBroadcaster::onStatusJsonReply()
         return;
     reply->deleteLater();
 
-    // GET /api/now: a main channel with someone live has status "live"; a
-    // pool lists its live channels under "live" (https://v2in.stream).
+    // GET /api/now: a channel of one with someone live has status "live"; a
+    // channel of several (its "live" a list) lists who is live there with
+    // the slot each is on (https://v2in.stream).
     QStringList occupied;
     if (reply->error() == QNetworkReply::NoError) {
         const QJsonObject root = QJsonDocument::fromJson(reply->readAll()).object();
         for (const QJsonValue &channel : root.value("channels").toArray()) {
-            if (channel.toObject().value("status").toString() == QStringLiteral("live"))
-                occupied << channel.toObject().value("id").toString();
-        }
-        for (const QJsonValue &pool : root.value("pools").toArray()) {
-            for (const QJsonValue &live : pool.toObject().value("live").toArray())
-                occupied << live.toObject().value("channel").toString();
+            const QJsonObject c = channel.toObject();
+            if (c.value("live").isArray()) {
+                for (const QJsonValue &live : c.value("live").toArray())
+                    occupied << live.toObject().value("channel").toString();
+            } else if (c.value("status").toString() == QStringLiteral("live")) {
+                occupied << c.value("id").toString();
+            }
         }
     }
     emit occupiedChannelsChanged(occupied);
