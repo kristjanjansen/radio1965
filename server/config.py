@@ -77,8 +77,10 @@ PUBLIC_BASE_URL = os.getenv("RADIO65_PUBLIC_BASE_URL", "https://live.uuu.ee/radi
 # POST /contributors/forgot-password. Not this server's own URL (that's
 # PUBLIC_BASE_URL above) - a separate static host (see contributor/
 # index.html's deployment notes).
+# 2026-11-07: v2in serves the page from this repository's main (was
+# "https://eccm.ee/radio1965/contributor/").
 CONTRIBUTOR_WEB_URL = os.getenv(
-    "RADIO65_CONTRIBUTOR_WEB_URL", "https://eccm.ee/radio1965/contributor/"
+    "RADIO65_CONTRIBUTOR_WEB_URL", "https://v2in.stream/radio1965/contributor/"
 )
 
 # Where request/app logs go (see main.py's logging setup) - rotated to
