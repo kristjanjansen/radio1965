@@ -34,6 +34,8 @@ const char *const ICECAST_HOST = "v2in.stream";
 const quint16 ICECAST_PORT = 8005;
 // v2in's API: /api/live/claim, /api/live/check, /api/now.
 const char *const V2IN_API = "https://v2in.stream/api";
+// claim and check: v2in answers both at once, so 15 s is a dead line
+constexpr int API_TIMEOUT_MS = 15000;
 const char *const ICE_GENRE = "avant-garde";
 
 constexpr int SAMPLE_RATE = 44100;
@@ -112,6 +114,9 @@ void IcecastBroadcaster::goLive(const QString &target, bool pool, const QString 
     // key 60 s, which openStream() connects to well within.
     QNetworkRequest request(QUrl(QString::fromLatin1(V2IN_API) + "/live/claim"));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    // a claim that never answers ends as "Could not reach v2in", not a
+    // Stop button with nothing behind it
+    request.setTransferTimeout(API_TIMEOUT_MS);
     const QJsonObject body{{"pool", target}, {"key", m_key}, {"keep", saveStream}};
     m_apiReply = m_statusNam.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
     connect(m_apiReply, &QNetworkReply::finished, this, &IcecastBroadcaster::onClaimReply);
@@ -128,7 +133,8 @@ void IcecastBroadcaster::onClaimReply()
         return;
     m_apiReply = nullptr;
 
-    const QJsonObject answer = QJsonDocument::fromJson(reply->readAll()).object();
+    // a timed-out reply is closed, nothing to read
+    const QJsonObject answer = reply->isOpen() ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject();
     if (reply->error() != QNetworkReply::NoError && answer.isEmpty()) {
         emit broadcastError(tr("Could not reach v2in: %1").arg(reply->errorString()));
         teardown();
@@ -311,6 +317,7 @@ void IcecastBroadcaster::askWhy()
 {
     QNetworkRequest request(QUrl(QString::fromLatin1(V2IN_API) + "/live/check"));
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setTransferTimeout(API_TIMEOUT_MS);
     // a pool channel is asked by its own name, which this key holds
     const QJsonObject body{{"channel", m_channel.isEmpty() ? m_target : m_channel}, {"key", m_key}};
     m_apiReply = m_statusNam.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
@@ -328,7 +335,8 @@ void IcecastBroadcaster::onCheckReply()
         return;
     m_apiReply = nullptr;
 
-    const QJsonObject answer = QJsonDocument::fromJson(reply->readAll()).object();
+    // a timed-out reply is closed, nothing to read
+    const QJsonObject answer = reply->isOpen() ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject();
     const QString reason = answer.value("reason").toString();
     if (answer.value("ok").toBool() || reason.isEmpty())
         emit broadcastError(tr("v2in did not take the connection. Try again."));
