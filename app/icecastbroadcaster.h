@@ -108,6 +108,9 @@ private slots:
     void onCheckReply();
 
 private:
+    // startBroadcast() once the microphone may be used: the claim, or the
+    // stream straight away.
+    void goLive(const QString &target, bool pool, const QString &key, const QString &name, const QString &description, bool sendNotification, bool saveStream);
     void openStream(const QString &channel);
     void sendIcecastHandshake();
     void closedByServer();

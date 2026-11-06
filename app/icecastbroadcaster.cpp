@@ -84,6 +84,11 @@ void IcecastBroadcaster::startBroadcast(const QString &target, bool pool, const 
         return;
     }
 
+    goLive(target, pool, key, name, description, sendNotification, saveStream);
+}
+
+void IcecastBroadcaster::goLive(const QString &target, bool pool, const QString &key, const QString &name, const QString &description, bool sendNotification, bool saveStream)
+{
     m_target = target;
     m_pool = pool;
     m_key = key.trimmed();
