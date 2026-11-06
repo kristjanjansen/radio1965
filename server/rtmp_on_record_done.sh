@@ -10,8 +10,8 @@
 # Unpublishes the event rtmp_on_publish.sh created for this channel (same
 # POST /events/{id}/unpublish server/icecast_on_disconnect.sh already uses
 # for audio), then converts the .flv to .mp4 (project-description.md
-# #8.2.2's draft conversion), moves it to eccm.ee, and finalizes the event
-# into a playable "streamrecording".
+# #8.2.2's draft conversion) and keeps it here (until 2026-11-07 it moved
+# it to eccm.ee and finalized the event into a playable "streamrecording").
 
 # link it to /usr/local/bin/rtmp_on_record_done.sh
 
@@ -81,23 +81,29 @@ fi
   log "converted '$FILE' -> '$OUT_PATH'"
   rm -f "$FILE"
 
-  ssh $ECCM_SSH_OPTS eccmee1@eccm.ee "mkdir -p '$REMOTE_DIR'" >>"$LOGFILE" 2>&1
+  # 2026-11-07: recordings are v2in's now, so the copy to eccm.ee and the
+  # finalize pointing at an eccm.ee URL are commented out below, not
+  # deleted. The converted file stays on this server, for old app builds
+  # that still broadcast here.
+  log "recording kept on this server at '$OUT_PATH' (no copy to eccm.ee since 2026-11-07)"
 
-  if rsync -az -e "ssh $ECCM_SSH_OPTS" "$OUT_PATH" "$REMOTE_DEST" >>"$LOGFILE" 2>&1; then
-    log "moved recording '$OUT_PATH' -> $REMOTE_DEST"
-    rm -f "$OUT_PATH"
-
-    if [ -n "$EVENT_ID" ]; then
-      REMOTE_URL="https://eccm.ee/radio1965/streams/video/$(basename "$OUT_PATH")"
-      FINALIZE_BODY=$(jq -n --arg url "$REMOTE_URL" --arg type "streamrecording" '{url: $url, type: $type}')
-      FINALIZE_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "$API_BASE/events/${EVENT_ID}/finalize-recording" \
-        -H "Content-Type: application/json" -d "$FINALIZE_BODY")
-      FINALIZE_HTTP_CODE=$(echo "$FINALIZE_RESPONSE" | tail -n1)
-      FINALIZE_BODY_RESPONSE=$(echo "$FINALIZE_RESPONSE" | sed '$d')
-      log "finalize-recording response: http=$FINALIZE_HTTP_CODE body=$FINALIZE_BODY_RESPONSE (event_id='$EVENT_ID' url='$REMOTE_URL')"
-    fi
-  else
-    log "failed to move recording '$OUT_PATH' to $REMOTE_DEST - left in place for retry"
-  fi
+#  ssh $ECCM_SSH_OPTS eccmee1@eccm.ee "mkdir -p '$REMOTE_DIR'" >>"$LOGFILE" 2>&1
+#
+#  if rsync -az -e "ssh $ECCM_SSH_OPTS" "$OUT_PATH" "$REMOTE_DEST" >>"$LOGFILE" 2>&1; then
+#    log "moved recording '$OUT_PATH' -> $REMOTE_DEST"
+#    rm -f "$OUT_PATH"
+#
+#    if [ -n "$EVENT_ID" ]; then
+#      REMOTE_URL="https://eccm.ee/radio1965/streams/video/$(basename "$OUT_PATH")"
+#      FINALIZE_BODY=$(jq -n --arg url "$REMOTE_URL" --arg type "streamrecording" '{url: $url, type: $type}')
+#      FINALIZE_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "$API_BASE/events/${EVENT_ID}/finalize-recording" \
+#        -H "Content-Type: application/json" -d "$FINALIZE_BODY")
+#      FINALIZE_HTTP_CODE=$(echo "$FINALIZE_RESPONSE" | tail -n1)
+#      FINALIZE_BODY_RESPONSE=$(echo "$FINALIZE_RESPONSE" | sed '$d')
+#      log "finalize-recording response: http=$FINALIZE_HTTP_CODE body=$FINALIZE_BODY_RESPONSE (event_id='$EVENT_ID' url='$REMOTE_URL')"
+#    fi
+#  else
+#    log "failed to move recording '$OUT_PATH' to $REMOTE_DEST - left in place for retry"
+#  fi
 ) &
 disown
