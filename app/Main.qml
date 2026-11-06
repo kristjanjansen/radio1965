@@ -50,8 +50,7 @@ ApplicationWindow {
         property string serverUrl: "https://live.uuu.ee/radio1965/api"
         property bool showInfoOnStartup: true
         // editor/index.html - opened externally by "Share a gem" below,
-        // with userSettings.accessToken appended so the user lands there
-        // already logged in (editor/index.html's ?token= handling).
+        // where it asks for its own login.
         property string editorWebUrl: "https://eccm.ee/radio1965/editor/"
     }
 
@@ -245,18 +244,13 @@ ApplicationWindow {
                 MenuItem {
                     text: qsTr("Share a gem")
                     // project-description.md #10's "Share a gem" action -
-                    // opens editor/index.html in the system browser
-                    // (rather than the in-app WebView used by
-                    // contributorDialog) so the full editing form has a
-                    // real browser's room/affordances to work with, with
-                    // accessToken appended so the user lands there already
-                    // logged in (editor/index.html's ?token= handling).
-                    // Only contributor|manager per the doc - excludes
-                    // temporaryContributor, which has no account/token to
-                    // log the editor in with anyway.
-                    visible: userSettings.role === "contributor" || userSettings.role === "manager"
+                    // opens editor/index.html in the system browser so the
+                    // full editing form has a real browser's room/
+                    // affordances to work with. The editor asks for its own
+                    // email and password login; the app no longer logs in,
+                    // so it hands over no token.
                     onTriggered: {
-                        Qt.openUrlExternally(appSettings.editorWebUrl + "?token=" + encodeURIComponent(userSettings.accessToken))
+                        Qt.openUrlExternally(appSettings.editorWebUrl)
                         drawer.close()
                     }
                 }
