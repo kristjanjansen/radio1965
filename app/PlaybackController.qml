@@ -376,6 +376,12 @@ QtObject {
         onMediaStatusChanged: {
             if (mediaStatus === MediaPlayer.BufferedMedia)
                 root.loading = false;
+            // a live stream that ends by itself (the server restarted, the connection closed) is tuned in again by
+            // _retryTimer, as one that was not there; a stop by the user never reaches EndOfMedia
+            if (mediaStatus === MediaPlayer.EndOfMedia && root.isLive) {
+                root.liveStreamOffline = true;
+                root.errorMessage = qsTr("Reconnecting");
+            }
         }
 
         // Keeps the display from timing out while something is actively
@@ -385,7 +391,8 @@ QtObject {
 
         onErrorOccurred: (error, errorString) => {
             root.loading = false;
-            if (root.isLive && error === MediaPlayer.ResourceError) {
+            // a live stream lost on the way (NetworkError) is tried again like one not found (ResourceError)
+            if (root.isLive && (error === MediaPlayer.ResourceError || error === MediaPlayer.NetworkError)) {
                 root.liveStreamOffline = true;
                 root.errorMessage = qsTr("No live stream");
             } else {
