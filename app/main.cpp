@@ -44,8 +44,8 @@ int main(int argc, char *argv[])
     NotificationManager notificationManager;
 
     QObject::connect(&eventsApiClient, &EventsApiClient::eventsReceived,
-                      &notificationManager, [&notificationManager](const QJsonArray &events, const QString &source) {
-                          notificationManager.upsertEvents(events, source);
+                      &notificationManager, [&notificationManager](const QJsonArray &events) {
+                          notificationManager.upsertEvents(events);
                       });
 
     // "New Arrivals" (status=new) - project-description.md #2.1. Shelving

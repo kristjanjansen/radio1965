@@ -115,10 +115,8 @@ int NotificationManager::indexOfId(const QString &id) const
     return -1;
 }
 
-void NotificationManager::upsertEvents(const QJsonArray &events, const QString &source)
+void NotificationManager::upsertEvents(const QJsonArray &events)
 {
-    const bool fromV2in = source == QStringLiteral("v2in");
-    const auto ours = [fromV2in](const QString &id) { return id.startsWith(QStringLiteral("v2in_")) == fromV2in; };
     QSet<QString> seenIds;
     QVector<EventItem> newItems;
 
@@ -145,7 +143,7 @@ void NotificationManager::upsertEvents(const QJsonArray &events, const QString &
         endInsertRows();
     }
 
-    // Prune rows of this source that no longer come back from it (e.g. deleted
+    // Prune rows that no longer come back from the server (e.g. deleted
     // from the DB) - GET /events is the source of truth on every fetch
     // (launch, manual refresh, push-triggered refresh), so anything absent
     // from a fresh response shouldn't linger locally. Doing this as part of
@@ -153,7 +151,7 @@ void NotificationManager::upsertEvents(const QJsonArray &events, const QString &
     // before the request, means a failed/offline fetch leaves the existing
     // list alone instead of blanking it.
     for (int i = m_events.size() - 1; i >= 0; --i) {
-        if (ours(m_events.at(i).id) && !seenIds.contains(m_events.at(i).id)) {
+        if (!seenIds.contains(m_events.at(i).id)) {
             beginRemoveRows(QModelIndex(), i, i);
             m_events.removeAt(i);
             endRemoveRows();

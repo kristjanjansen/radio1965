@@ -13,7 +13,7 @@ EventsApiClient::EventsApiClient(QObject *parent)
 {
 }
 
-void EventsApiClient::fetchEvents(const QString &baseUrl, const QString &source)
+void EventsApiClient::fetchEvents(const QString &baseUrl)
 {
     QNetworkRequest request(QUrl(baseUrl + "/events"));
     //qDebug() << "EventsApiClient: requesting" << request.url();
@@ -28,7 +28,7 @@ void EventsApiClient::fetchEvents(const QString &baseUrl, const QString &source)
         qDebug() << "EventsApiClient: sslErrors" << errors;
     });
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, source]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         //qDebug() << "EventsApiClient: finished signal received, error=" << reply->error();
         reply->deleteLater();
 
@@ -39,7 +39,7 @@ void EventsApiClient::fetchEvents(const QString &baseUrl, const QString &source)
 
         const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
         const QJsonArray events = doc.object().value("events").toArray();
-        emit eventsReceived(events, source);
+        emit eventsReceived(events);
     });
 }
 

@@ -16,9 +16,7 @@ public:
     explicit EventsApiClient(QObject *parent = nullptr);
 
     // baseUrl example: "https://live.uuu.ee/radio1965/api" (no trailing slash).
-    // source names whose cards these are ("" this server, "v2in" https://v2in.stream/api), so each answer
-    // replaces only its own cards in NotificationManager::upsertEvents.
-    Q_INVOKABLE void fetchEvents(const QString &baseUrl, const QString &source = QString());
+    Q_INVOKABLE void fetchEvents(const QString &baseUrl);
 
     // Fetches one Joomla article's rendered HTML via the server's
     // GET /articles/{id} proxy (server/main.py) - the app never talks to
@@ -27,7 +25,7 @@ public:
 
 signals:
     // One element per event, each shaped like server/db.py's Event.to_dict().
-    void eventsReceived(const QJsonArray &events, const QString &source);
+    void eventsReceived(const QJsonArray &events);
     void fetchFailed(const QString &errorString);
 
     // html is a full, ready-to-render document (server-wrapped); baseUrl is
