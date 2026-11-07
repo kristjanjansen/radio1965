@@ -1,5 +1,7 @@
 #include "fakeicecastbroadcaster.h"
 
+#include <QVariantMap>
+
 FakeIcecastBroadcaster::FakeIcecastBroadcaster(QObject *parent)
     : QObject(parent)
 {
@@ -18,7 +20,7 @@ void FakeIcecastBroadcaster::setGain(qreal gain)
     emit gainChanged();
 }
 
-void FakeIcecastBroadcaster::startBroadcast(const QString &, const QString &, const QString &, bool, bool, const QString &)
+void FakeIcecastBroadcaster::startBroadcast(const QString &, bool, const QString &, const QString &, const QString &, bool, bool)
 {
     if (m_broadcasting)
         return;
@@ -45,4 +47,9 @@ void FakeIcecastBroadcaster::stopBroadcast()
 void FakeIcecastBroadcaster::refreshOccupiedChannels()
 {
     emit occupiedChannelsChanged({});
+}
+
+void FakeIcecastBroadcaster::refreshDestinations(const QString &)
+{
+    emit destinationsChanged({QVariantMap{{"id", "community"}, {"name", "Community"}, {"pool", true}}}, QString());
 }

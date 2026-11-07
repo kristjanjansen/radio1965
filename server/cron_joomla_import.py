@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
+    # 2026-11-07: off. eccm.ee's Joomla goes away when eccm.ee moves to its new site, and ECCM posts no news to
+    # the app any more; the crontab line can stay, it now returns at once. Remove this return to switch it back on.
+    return
     session = db.SessionLocal()
     try:
         last_sync = joomla_importer.load_last_sync()

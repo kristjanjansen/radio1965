@@ -7,17 +7,24 @@
 #include <QObject>
 #include <QStringList>
 #include <QTimer>
+#include <QVariantList>
 
 struct lame_global_struct;
 typedef struct lame_global_struct lame_global_flags;
 
 class QAudioSource;
 class QIODevice;
+class QNetworkReply;
 class QTcpSocket;
 
-// Captures microphone audio and streams it to an Icecast2 mountpoint
-// (project-description.md #8.1/#9): QAudioSource -> libmp3lame -> a
-// hand-rolled Icecast HTTP-source client over QTcpSocket. Built on Desktop
+// Captures microphone audio and streams it to v2in's harbor
+// (https://v2in.stream, port 8005), the Icecast source protocol:
+// QAudioSource -> libmp3lame -> a hand-rolled Icecast HTTP-source client
+// over QTcpSocket. The password is the broadcaster's key: a contributor's
+// or manager's access_token from this app's login, or the temporary
+// contributor password; a channel of several streamers (e.g. "community")
+// is first claimed over v2in's API, which answers with the slot to connect to. v2in
+// checks the key with this app's server. Built on Desktop
 // and Android (see app/CMakeLists.txt's RADIO65_ENABLE_BROADCAST gate,
 // which cross-compiles libmp3lame via the NDK on Android) - registered as
 // QML context property "icecastBroadcaster" only when that macro is
@@ -39,6 +46,10 @@ class IcecastBroadcaster : public QObject
     // (and the meter above, which reads post-gain samples) rather than
     // just a UI-only value. 1.0 = unity, clamped to [0, 4] in setGain().
     Q_PROPERTY(qreal gain READ gain WRITE setGain NOTIFY gainChanged)
+    // When v2in ends this session (ms since the epoch), 0 for no limit -
+    // from the pool claim's "until" (a temporary contributor's 3 minutes); the server
+    // enforces it, this is only for showing the time left.
+    Q_PROPERTY(qint64 until READ until NOTIFY untilChanged)
 
 public:
     explicit IcecastBroadcaster(QObject *parent = nullptr);
@@ -50,43 +61,37 @@ public:
     qreal inputLevel() const { return m_inputLevel; }
     qreal gain() const { return m_gain; }
     void setGain(qreal gain);
+    qint64 until() const { return m_until; }
 
-    // channel: one of "radio1965"/"live"/"user1".."user4" (no leading
-    // slash) - "live" picks a different source password, see
-    // ICECAST_LIVE_PASSWORD in the .cpp.
+    // target: a channel of v2in (e.g. "live", the mount the key is sent
+    // to) or, with pool set, a channel of several streamers (e.g.
+    // "community"): then POST /api/live/claim { channel, key, keep } first,
+    // and the slot it
+    // answers with is the mount, held for this key 60 s. A refusal (the
+    // claim's, or the harbor's, asked again at /api/live/check for its
+    // reason) comes back as refused(). key: the access_token, or the
+    // temporary contributor password; it goes only as the harbor password,
+    // never into a header Icecast publishes.
     // name/description become the ice-name/ice-description headers.
     // sendNotification/saveStream: both forwarded packed into the
-    // ice-audio-info header as "send_notification=<0|1>;save_stream=<0|1>"
-    // (see server/icecast_on_connect.sh, which reads them back). ice-public
-    // was tried first (as a 0/1 "should this publish a notification" flag)
-    // but doesn't survive into status-json.xsl at all on this Icecast setup
-    // (no <directory> block configured - the "public" field is simply
-    // absent from the JSON, confirmed via a live capture). ice-audio-info
-    // works instead because Icecast parses its semicolon-separated
-    // key=value pairs and hoists *every* key - not just its own recognized
-    // ones (bitrate/samplerate/channels) - onto its own top-level field on
-    // the source object, e.g. {"audio_info":"save_stream=1;...",
-    // "save_stream":1, "send_notification":0, ...}. A brand-new custom
-    // ice-* header isn't used here because Icecast only serializes its
-    // fixed known header set at all - an invented header name wouldn't be
-    // read, let alone reflected into status-json.xsl.
-    // TODO(save-stream): server/icecast_on_connect.sh currently only reads
-    // and logs this value; there's no recording pipeline behind it yet
-    // (see TODOs.md "Save audio stream - if required").
-    // accessToken: the broadcasting contributor's account token (empty for
-    // temporaryContributor, which has none) - carried the same way as
-    // sendNotification/saveStream above (see ice-audio-info comment) so
-    // server/icecast_on_connect.sh can set the published event's
-    // author_id.
-    Q_INVOKABLE void startBroadcast(const QString &channel, const QString &name, const QString &description, bool sendNotification, bool saveStream, const QString &accessToken = QString());
+    // ice-audio-info header as "send_notification=<0|1>;save_stream=<0|1>",
+    // which v2in reads as the source connects (save_stream keeps the
+    // session's recording); saveStream is also the claim's keep.
+    Q_INVOKABLE void startBroadcast(const QString &target, bool pool, const QString &key, const QString &name, const QString &description, bool sendNotification, bool saveStream);
     Q_INVOKABLE void stopBroadcast();
 
-    // Queries http://live.uuu.ee:8001/status-json.xsl and reports which
-    // mountpoints are currently occupied via occupiedChannelsChanged().
+    // Queries v2in's GET /api/now and reports which channels have someone
+    // live (main channels and pool channels) via occupiedChannelsChanged().
     // Best-effort: a network failure reports an empty list rather than
     // raising broadcastError, since occupancy is advisory (disables
     // channel choices in the UI), not a hard gate on broadcasting.
     Q_INVOKABLE void refreshOccupiedChannels();
+
+    // Where this key may go live, as v2in says: POST /api/live/check
+    // { key } with no channel answers may: [{ id, name, live }] (live: how
+    // many may stream there at once; pool below is live over 1),
+    // reported via destinationsChanged(). The app names no destination.
+    Q_INVOKABLE void refreshDestinations(const QString &key);
 
 signals:
     void broadcastStateChanged();
@@ -96,6 +101,15 @@ signals:
     void occupiedChannelsChanged(const QStringList &occupied);
     void inputLevelChanged();
     void gainChanged();
+    void untilChanged();
+    // v2in said no: reason as the server words it ("unknown key", "pool
+    // full", "cooldown", ...), next when it may work (ISO time, or empty),
+    // target the channel or pool asked for. BroadcastPage.qml words it.
+    void refused(const QString &reason, const QString &next, const QString &target);
+    // may: refreshDestinations()'s answer, each { id, name, pool }; empty
+    // with reason when v2in refuses the key ("unknown key", "banned", ...)
+    // or "no answer" when v2in could not be reached.
+    void destinationsChanged(const QVariantList &may, const QString &reason);
 
 private slots:
     void onSocketConnected();
@@ -105,9 +119,18 @@ private slots:
     void onAudioReadyRead();
     void onElapsedTick();
     void onStatusJsonReply();
+    void onClaimReply();
+    void onCheckReply();
+    void onMayReply();
 
 private:
-    void sendIcecastHandshake(const QString &channel, const QString &name, const QString &description, bool sendNotification, bool saveStream, const QString &accessToken);
+    // startBroadcast() once the microphone may be used: the claim, or the
+    // stream straight away.
+    void goLive(const QString &target, bool pool, const QString &key, const QString &name, const QString &description, bool sendNotification, bool saveStream);
+    void openStream(const QString &channel);
+    void sendIcecastHandshake();
+    void closedByServer();
+    void askWhy();
     void encodeAndSend(const QByteArray &pcm);
     void teardown();
 
@@ -115,6 +138,22 @@ private:
     QAudioSource *m_audioSource = nullptr;
     QIODevice *m_audioDevice = nullptr;
     QNetworkAccessManager m_statusNam;
+    // The claim or check in flight, aborted by teardown()/a new start.
+    QNetworkReply *m_apiReply = nullptr;
+    // refreshDestinations()'s check in flight; a newer one replaces it.
+    QNetworkReply *m_mayReply = nullptr;
+
+    // This session, kept from startBroadcast() for the claim's answer and
+    // the handshake: m_channel is the mount (the pool's pick for a pool).
+    QString m_target;
+    bool m_pool = false;
+    QString m_key;
+    QString m_name;
+    QString m_description;
+    bool m_sendNotification = false;
+    bool m_saveStream = false;
+    QString m_channel;
+    qint64 m_until = 0;
 
     lame_global_flags *m_lame = nullptr;
 

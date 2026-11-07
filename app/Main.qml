@@ -51,11 +51,11 @@ ApplicationWindow {
         property bool showInfoOnStartup: true
         // contributor/index.html - register/login/forgot-password page
         // embedded by contributorDialog's WebView below.
-        property string contributorWebUrl: "https://eccm.ee/radio1965/contributor/"
+        property string contributorWebUrl: "https://v2in.stream/radio1965/contributor/"
         // editor/index.html - opened externally by "Share a gem" below,
         // with userSettings.accessToken appended so the user lands there
         // already logged in (editor/index.html's ?token= handling).
-        property string editorWebUrl: "https://eccm.ee/radio1965/editor/"
+        property string editorWebUrl: "https://v2in.stream/radio1965/editor/"
     }
 
     // "Become a Contributor" gate (project-description.md #10) - role is
@@ -74,6 +74,11 @@ ApplicationWindow {
         // "Become a Contributor" flow (#10.2) - temporaryContributor
         // (#10.1) has no account/token of its own.
         property string accessToken: ""
+        // temporaryContributor's password, as checked by
+        // /temporary-contributor/verify - kept because it is also the
+        // broadcast password on v2in (BroadcastPage.qml's key), as the
+        // accessToken is for the other roles.
+        property string temporaryPassword: ""
     }
 
     Component.onCompleted: {
@@ -297,7 +302,10 @@ ApplicationWindow {
                     // "Become a Contributor" above stays offered even as a
                     // temporaryContributor, so upgrading later is still
                     // possible; this one has nothing left to offer then.
+                    // Also for a temporaryContributor from an earlier
+                    // version, which kept no password to broadcast with
                     visible: userSettings.role === "none"
+                             || (userSettings.role === "temporaryContributor" && !userSettings.temporaryPassword)
                     onTriggered: {
                         temporaryContributorDialog.open()
                         drawer.close()
@@ -317,6 +325,7 @@ ApplicationWindow {
                             leaveContributorDialog.open()
                         } else {
                             userSettings.role = "none"
+                            userSettings.temporaryPassword = ""
                         }
                     }
                 }
@@ -539,9 +548,10 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
             // back via the "?action=result&data=" navigation below instead of
             // redirecting to the editor page (which only makes sense for a
             // standalone browser visit).
-            // "&t=" cache-buster: eccm.ee sends no Cache-Control, so iOS's
-            // WKWebView could keep serving an older cached copy of the page
-            // (heuristic caching off Last-Modified) after it's redeployed.
+            // "&t=" cache-buster: v2in serves these pages with
+            // Cache-Control: no-cache, so iOS's WKWebView asks again each
+            // time; the cache-buster also skips a copy it may still hold
+            // from eccm.ee, which sent no Cache-Control at all.
             contributorWebView.url = appSettings.contributorWebUrl + "?embed=app&t=" + Date.now()
         }
 
@@ -678,6 +688,7 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
                 if (xhr.status === 200) {
                     userSettings.role = "temporaryContributor";
                     userSettings.contributorName = tempNameField.text;
+                    userSettings.temporaryPassword = tempPasswordField.text;
                     temporaryContributorDialog.close();
                 } else if (xhr.status === 403) {
                     temporaryContributorDialog.errorMessage = qsTr("Incorrect password.");
@@ -1212,12 +1223,10 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
                     isContributor: userSettings.role === "contributor" || userSettings.role === "temporaryContributor"
                                    || userSettings.role === "manager"
                     isTemporaryContributor: userSettings.role === "temporaryContributor"
-                    // Threaded down into IcecastBroadcaster's ice-audio-info
-                    // header so server/icecast_on_connect.sh can set the
-                    // published event's author_id - empty for
-                    // temporaryContributor, which has no account/token.
-                    accessToken: userSettings.accessToken
-                    isManager: userSettings.role === "manager"
+                    // The harbor password on v2in, which checks it with this
+                    // app's server: the account's token, or the temporary
+                    // contributor password. Never sent in ice-audio-info.
+                    key: userSettings.role === "temporaryContributor" ? userSettings.temporaryPassword : userSettings.accessToken
                 }
 
 

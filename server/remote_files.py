@@ -29,32 +29,38 @@ def delete_eccm_stream_file(url: str) -> None:
     $HOME/.ssh (no -i flag) rather than a dedicated key file - see
     config.py's RADIO65_ECCM_SSH_* comment.
     """
-    filename = urlparse(url).path.rsplit("/", 1)[-1]
-    if not filename:
-        logger.warning("delete_eccm_stream_file: could not derive a filename from url '%s'", url)
-        return
+    # 2026-11-07: recordings are v2in's now and nothing is copied to
+    # eccm.ee any more, so there is nothing there to delete. A no-op, the
+    # ssh delete commented out below, not deleted.
+    logger.info("delete_eccm_stream_file: no-op since 2026-11-07, not deleting '%s'", url)
+    return
 
-    remote_path = f"{config.RADIO65_ECCM_STREAMS_DIR}/{filename}"
-    try:
-        result = subprocess.run(
-            [
-                "ssh",
-                "-p", str(config.RADIO65_ECCM_SSH_PORT),
-                f"{config.RADIO65_ECCM_SSH_USER}@{config.RADIO65_ECCM_SSH_HOST}",
-                "rm", "-f", remote_path,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except Exception:
-        logger.exception("delete_eccm_stream_file: ssh rm failed for '%s'", remote_path)
-        return
+    # filename = urlparse(url).path.rsplit("/", 1)[-1]
+    # if not filename:
+    #     logger.warning("delete_eccm_stream_file: could not derive a filename from url '%s'", url)
+    #     return
 
-    if result.returncode == 0:
-        logger.info("delete_eccm_stream_file: removed '%s'", remote_path)
-    else:
-        logger.warning(
-            "delete_eccm_stream_file: ssh rm for '%s' exited %d: %s",
-            remote_path, result.returncode, result.stderr.strip(),
-        )
+    # remote_path = f"{config.RADIO65_ECCM_STREAMS_DIR}/{filename}"
+    # try:
+    #     result = subprocess.run(
+    #         [
+    #             "ssh",
+    #             "-p", str(config.RADIO65_ECCM_SSH_PORT),
+    #             f"{config.RADIO65_ECCM_SSH_USER}@{config.RADIO65_ECCM_SSH_HOST}",
+    #             "rm", "-f", remote_path,
+    #         ],
+    #         capture_output=True,
+    #         text=True,
+    #         timeout=30,
+    #     )
+    # except Exception:
+    #     logger.exception("delete_eccm_stream_file: ssh rm failed for '%s'", remote_path)
+    #     return
+
+    # if result.returncode == 0:
+    #     logger.info("delete_eccm_stream_file: removed '%s'", remote_path)
+    # else:
+    #     logger.warning(
+    #         "delete_eccm_stream_file: ssh rm for '%s' exited %d: %s",
+    #         remote_path, result.returncode, result.stderr.strip(),
+    #     )
