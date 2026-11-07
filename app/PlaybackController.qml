@@ -260,16 +260,8 @@ QtObject {
     property bool isLive: true
     property string selectedChannel: ""   // v2in's first channel once /api/now answers
 
-    // Purely which combobox PlayerBar.qml shows (live channels vs recent
-    // media) - independent of isLive/mediaUrl so toggling this in the UI
-    // never touches actual playback, only which picker is visible.
-    property bool browsingRecentMedia: false
-
-    function toggleSelectorMode() {
-        root.browsingRecentMedia = !root.browsingRecentMedia;
-    }
-
-    // Local playback history (project-description.md #8.2.1's "Save
+    // Local playback history, kept though PlayerBar's recent-media picker
+    // that listed it is gone (project-description.md #8.2.1's "Save
     // stream" recordings included - anything played via playMedia() with
     // isLive=false), persisted via QtCore.Settings same as
     // BroadcastPage.qml's broadcastSettings. Settings can't natively store
@@ -354,6 +346,12 @@ QtObject {
             root.liveInfo = { title: v2in.name, summary: v2in.silence || qsTr("Nobody live now") };
             return;
         }
+        // a mix plays who is live in it, named as its card names them
+        if (v2in && v2in.pool && Array.isArray(v2in.live) && v2in.live.length && !v2in.title && !v2in.by) {
+            root.liveInfo = { title: v2in.live.map(l => l.title || l.artist).filter(Boolean).join(", ") || qsTr("Live"),
+                              summary: qsTr("Live on v2in") };
+            return;
+        }
         if (v2in && v2in.status !== "offline" && (v2in.title || v2in.by)) {
             root.liveInfo = { title: [v2in.by, v2in.title].filter(Boolean).join(" - "),
                               summary: v2in.status === "silent" ? qsTr("Silent until the alert ends")
@@ -376,9 +374,9 @@ QtObject {
         return root.v2inBaseUrl + "/stream/" + channel;
     }
 
-    // Called by PlayerBar's channel ComboBox onActivated (a real user pick,
-    // not merely opening the popup) - starts playback immediately so the
-    // user doesn't need a separate Play press after picking a channel.
+    // Called by a channel card's play (ChannelCard.qml) - starts playback
+    // immediately, switching from whatever played before (one stream at a
+    // time).
     function selectChannel(channel) {
         root.selectedChannel = channel;
         root.isLive = true;
@@ -394,18 +392,11 @@ QtObject {
         root.mediaUrl = url;
         root.mediaTitle = title;
         root.mediaSummary = summary;
-        // Keep PlayerBar's channel ComboBox (bound to selectedChannel) in
-        // sync with whatever's actually playing - e.g. tapping a
-        // "livestream" Card/notification for "user1" while selectedChannel
-        // was still "radio1965" from a previous session left the ComboBox
-        // showing the wrong channel even though the right one was playing.
-        // Only PlayerBar's own onActivated calls selectChannel() directly
-        // (a real user pick), so updating selectedChannel here - a plain
-        // property write, not a call to selectChannel()/start() - can't
-        // cause a double-trigger: it neither re-enters start() itself (the
-        // call below already covers that) nor fires onActivated, which only
-        // reacts to actual popup interaction, not a currentIndex binding
-        // update.
+        // Keep selectedChannel in sync with whatever's actually playing -
+        // e.g. tapping a "livestream" Card/notification for "user1" while
+        // selectedChannel was still "radio1965" from a previous session.
+        // A plain property write, not a call to selectChannel()/start(), so
+        // it can't re-enter start() (the call below already covers that).
         if (isLive) {
             const matched = root.channelOptions.find(channel => root.channelUrl(channel) === url);
             if (matched)
@@ -465,13 +456,9 @@ QtObject {
         }
     }
 
-    // Just stops playback - does NOT touch mediaUrl/isLive/title, so the
-    // strip keeps showing what was loaded (e.g. an audio file's title, with
-    // Play available to resume it) instead of jumping back to the channel
-    // picker on its own. Previously this reset straight to radio mode,
-    // which looked wrong when Stop was pressed on a fixed-media item (the
-    // combobox would appear even though the file was still the loaded
-    // item) - use backToChannels() for an explicit return to radio mode.
+    // Just stops playback - does NOT touch mediaUrl/isLive/title (PlayerBar
+    // hides once stopped) - use backToChannels() for an explicit return to
+    // radio mode.
     function stop() {
         player.stop();
         root.errorMessage = "";
@@ -480,9 +467,7 @@ QtObject {
 
     // Explicit "done listening to this file, back to radio" action - stops
     // playback and resets isLive/mediaUrl/liveInfo. Not currently wired to
-    // any PlayerBar.qml control (the old media-icon tap that used to call
-    // this now calls toggleSelectorMode() instead, which is a pure view
-    // toggle that never touches playback) - left available for whatever
+    // any PlayerBar.qml control - left available for whatever
     // future control needs a full reset back to live/idle.
     function backToChannels() {
         player.stop();

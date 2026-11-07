@@ -3,22 +3,34 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtMultimedia
 
-// Persistent, always-visible mini-player strip - lives above the StackView
-// in Main.qml (not inside a tab/page) so it survives tab switches and
-// pushed pages (WebViewPage, VideoPage). All actual playback state lives in
-// the PlaybackController instance passed in from Main.qml; this is purely
-// the view.
+// Now-playing bar, one row of constant height, always there so nothing under it jumps: what plays (a channel from
+// a Home card, a recording from Collection), or a muted "Nothing playing" with stop greyed. Lives above the StackView in Main.qml (not inside a tab/page) so it survives
+// tab switches and pushed pages (WebViewPage, VideoPage). Picking a channel is the cards' (ChannelCard.qml), so the
+// bar keeps what belongs to what plays: stop (pause for a recording), what plays, volume, and a recording's seek bar
+// under its chevron. All actual playback state lives in the PlaybackController instance passed in from Main.qml;
+// this is purely the view.
 Item {
     id: root
     required property PlaybackController controller
-    implicitHeight: contentColumn.implicitHeight + 12
+    // Main.qml's app.gap: the space between the bar's icons, and from the window's edges to the first and last
+    required property int gap
+    // a CompactToolButton's padding around its 24 px icon, (34 - 24) / 2, so the icons, not the buttons, are a gap
+    // apart
+    readonly property int iconInset: 5
+    implicitHeight: contentColumn.implicitHeight + root.gap
 
-    // True while either combobox dropdown is open - Main.qml uses this to
-    // hide native WebView content, which would otherwise draw over the popup.
-    readonly property bool popupOpen: channelCombo.popup.visible || recentMediaCombo.popup.visible
+    // Something plays, is tuning in, is being tuned in again, is paused, or failed (its error shows); stop is
+    // greyed and the text says "Nothing playing" otherwise
+    readonly property bool active: root.controller.player.playbackState !== MediaPlayer.StoppedState
+                                   || root.controller.loading || root.controller.liveStreamOffline
+                                   || root.controller.errorMessage !== ""
+    readonly property bool recording: !root.controller.isLive && root.active
+    // the name and what plays: larger than the old ticker's 8 pt since it scrolls anyway, a little under the
+    // cards' 16 pt names
+    readonly property real textSize: 14
 
     // Material's ToolButton pads ~12px each side of its 24px icon; tighter
-    // here so play/stop/expand sit close together in the player strip.
+    // here so the bar's buttons sit close together.
     component CompactToolButton: ToolButton {
         padding: 0
         leftPadding: 0
@@ -42,245 +54,147 @@ Item {
         id: contentColumn
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.leftMargin: 12
+        anchors.leftMargin: root.gap - root.iconInset
+        anchors.rightMargin: root.gap - root.iconInset
         anchors.top: parent.top
-        anchors.margins: 6
-        spacing: 6
+        anchors.topMargin: root.gap / 2
+        spacing: root.gap / 2
 
-        // Flow rather than one RowLayout: on narrow screens the volume +
-        // transport group wraps onto its own line under the channel picker
-        // instead of squeezing/overflowing. Each group is a RowLayout sized
-        // explicitly (a Flow doesn't stretch children): side by side when
-        // both fit, otherwise each takes the full width.
-        Flow {
-            id: controlsRow
+        RowLayout {
             Layout.fillWidth: true
-            spacing: 2
+            spacing: root.gap - 2 * root.iconInset
 
-            // Free space when both groups fit on one line - shared equally
-            // so the slider grows along with the picker.
-            readonly property real extra: Math.max(0, width - spacing - selectorGroup.implicitWidth - volumeGroup.implicitWidth)
-
-            readonly property bool wrapped: selectorGroup.implicitWidth + volumeGroup.implicitWidth + spacing > width
-
-        RowLayout {
-            id: selectorGroup
-            width: controlsRow.wrapped ? controlsRow.width
-                                       : implicitWidth + controlsRow.extra / 2
-            spacing: 2
-
-            BusyIndicator {
-                implicitWidth: 20
-                implicitHeight: 20
-                running: root.controller.loading
-                visible: running
+            // a recording pauses and plays on; a channel only stops, as a radio does
+            CompactToolButton {
+                visible: root.recording
+                icon.source: root.controller.player.playbackState === MediaPlayer.PlayingState
+                             ? "qrc:/images/pause.svg" : "qrc:/images/play.svg"
+                onClicked: root.controller.togglePlayPause()
             }
 
-            Image {
-                source: root.controller.browsingRecentMedia ? "qrc:/images/audio_file.svg" :
-                            "qrc:/images/radio.svg"
-                sourceSize.width: 22
-                sourceSize.height: 22
+            CompactToolButton {
+                icon.source: "qrc:/images/stop.svg"
+                enabled: root.active
+                onClicked: root.controller.stop()
 
-
-                // Pure view toggle between the live-channel and recent-media
-                // comboboxes below - never touches actual playback, so
-                // tapping this is safe regardless of what's currently
-                // playing (see PlaybackController.toggleSelectorMode()).
-                TapHandler {
-                    onTapped: root.controller.toggleSelectorMode()
+                BusyIndicator {
+                    anchors.centerIn: parent
+                    implicitWidth: 34
+                    implicitHeight: 34
+                    running: root.controller.loading
+                    visible: running
                 }
             }
 
-            ComboBox {
-                id: channelCombo
-                Layout.minimumWidth: 110
-                Layout.preferredWidth: 130
+            // the channel's name, for a channel (a recording's title is in the line beside it); "Nothing playing"
+            // when stopped
+            Label {
+                Layout.leftMargin: root.iconInset
+                Layout.alignment: Qt.AlignVCenter
+                visible: text !== ""
+                text: {
+                    if (!root.active)
+                        return qsTr("Nothing playing");
+                    if (root.recording || root.controller.mediaUrl)
+                        return "";
+                    const c = root.controller.v2inChannel(root.controller.selectedChannel);
+                    return c ? c.name : root.controller.selectedChannel;
+                }
+                font.pointSize: root.textSize
+                font.bold: root.active
+                opacity: root.active ? 1 : 0.5
+            }
+
+            // What plays - single-pass marquee, the one place title/summary
+            // show in the row, whether live or fixed media. Empty while
+            // expanded, since the rows below already show them in full there.
+            Item {
+                id: nowPlayingRow
                 Layout.fillWidth: true
-                Layout.maximumWidth: 250
+                Layout.leftMargin: root.gap / 2
+                Layout.rightMargin: root.gap / 2
+                Layout.alignment: Qt.AlignVCenter
+                Layout.preferredHeight: nowPlayingLabel.implicitHeight
+                clip: true
 
-                visible: !root.controller.browsingRecentMedia
-                model: root.controller.channelOptions
-                currentIndex: root.controller.channelOptions.indexOf(root.controller.selectedChannel)
-                onActivated: root.controller.selectChannel(root.controller.channelOptions[currentIndex])
-                // a pool by its name and show, never its channel (PlaybackController.channelLabel)
-                displayText: root.controller.channelLabel(currentText)
-                delegate: ItemDelegate {
-                    width: channelCombo.width
-                    text: root.controller.channelLabel(modelData)
-                    enabled: root.controller.isChannelStreaming(modelData)
-                }
-                background: Rectangle {
-                    implicitWidth: 110
-                    implicitHeight: 32
-                    radius: 4
-                    color: "transparent"
-                    border.width: 0
-                    border.color: "transparent"
+                readonly property string scrollText: {
+                    if (!root.active || (root.controller.expanded && root.recording))
+                        return "";
+                    const t = root.controller.displayTitle;
+                    const s = root.controller.displaySummary;
+                    return t && s ? (t + "   -   " + s) : (t || s || "");
                 }
 
-                Connections {
-                    target: channelCombo.popup
-                    function onOpened() { root.controller.refreshChannelAvailability(); }
-                }
-            }
+                Label {
+                    id: nowPlayingLabel
+                    text: nowPlayingRow.scrollText
+                    font.pointSize: root.textSize
 
-            // Recent-media picker - local playback history (project-
-            // description.md #8.2.1's "Save stream" recordings included),
-            // see PlaybackController._recordRecentMedia(). Doubles as the
-            // "currently selected" indicator the same way channelCombo does
-            // for live channels: currentIndex tracks controller.mediaUrl.
-            // A leading "Recent media" placeholder (index 0, not a real
-            // history entry) is shown whenever nothing currently loaded
-            // matches an entry, rather than defaulting to the most-recent
-            // real item - that looked selected/loaded even though nothing
-            // had actually been chosen yet, so pressing Play just resumed
-            // whatever was playing before (e.g. the radio channel) instead
-            // of the item the combobox appeared to show.
-            ComboBox {
-                id: recentMediaCombo
-                Layout.minimumWidth: 110
-                Layout.preferredWidth: 130
-                Layout.fillWidth: true
-                Layout.maximumWidth: 250
-                visible: root.controller.browsingRecentMedia
-                model: [{ title: qsTr("Recent media"), url: "" }].concat(root.controller.recentMedia)
-                textRole: "title"
-                valueRole: "url"
-                currentIndex: {
-                    for (let i = 0; i < root.controller.recentMedia.length; i++) {
-                        if (root.controller.recentMedia[i].url === root.controller.mediaUrl)
-                            return i + 1; // +1: index 0 is the placeholder
+                    readonly property bool needsScroll: implicitWidth > nowPlayingRow.width
+
+                    // Plain SequentialAnimation with an explicit target/property
+                    // (started/stopped imperatively below), not "SequentialAnimation
+                    // on x": the latter permanently destroys any declarative
+                    // binding on x the first time it actually runs (QML: writing
+                    // to a property, including via an animation, removes its
+                    // binding - it does not come back once the animation stops).
+                    // That meant a later short/empty title got stuck wherever
+                    // the animation last left x (often off-screen), looking
+                    // like the row "didn't clear" even though `text` itself had
+                    // updated correctly.
+                    SequentialAnimation {
+                        id: scrollAnim
+                        loops: Animation.Infinite
+                        NumberAnimation {
+                            target: nowPlayingLabel
+                            property: "x"
+                            from: nowPlayingRow.width
+                            to: -nowPlayingLabel.implicitWidth
+                            duration: Math.max(12000, nowPlayingLabel.implicitWidth * 30)
+                        }
+                        PauseAnimation { duration: 800 }
                     }
-                    return 0;
-                }
-                onActivated: {
-                    if (currentIndex === 0)
-                        return; // placeholder - not a real item, no-op
-                    const item = root.controller.recentMedia[currentIndex - 1];
-                    if (item)
-                        root.controller.playMedia(item.url, item.title, item.summary, false);
-                }
-                background: Rectangle {
-                    implicitWidth: 110
-                    implicitHeight: 32
-                    radius: 4
-                    color: "transparent"
-                    border.width: 0
-                    border.color: "transparent"
+
+                    function _restartScroll() {
+                        if (nowPlayingRow.visible && needsScroll) {
+                            nowPlayingLabel.x = nowPlayingRow.width;
+                            scrollAnim.restart();
+                        } else {
+                            scrollAnim.stop();
+                            nowPlayingLabel.x = 0;
+                        }
+                    }
+
+                    onTextChanged: nowPlayingLabel._restartScroll()
+                    onNeedsScrollChanged: nowPlayingLabel._restartScroll()
+                    Component.onCompleted: nowPlayingLabel._restartScroll()
+
+                    Connections {
+                        target: nowPlayingRow
+                        function onVisibleChanged() { nowPlayingLabel._restartScroll(); }
+                    }
                 }
             }
-
-        }
-
-        RowLayout {
-            id: volumeGroup
-            width: controlsRow.wrapped ? controlsRow.width : implicitWidth + controlsRow.extra / 2
-            spacing: 0
 
             Image {
                 source: "qrc:/images/sound.svg"
-                // sourceSize.width: 18
-                // sourceSize.height: 18
             }
 
             Slider {
                 Layout.preferredWidth: 80
                 Layout.minimumWidth: 40
-                Layout.maximumWidth: 400
-                Layout.fillWidth:  true
                 from: 0
                 to: 1
                 value: root.controller.player.audioOutput.volume
                 onMoved: root.controller.setVolume(value)
             }
 
-            ToolButton {
-                icon.source: root.controller.player.playbackState === MediaPlayer.PlayingState
-                             ? "qrc:/images/pause.svg" : "qrc:/images/play.svg"
-                onClicked: root.controller.togglePlayPause()
-            }
-
-            ToolButton {
-                icon.source: "qrc:/images/stop.svg"
-                onClicked: root.controller.stop()
-            }
-
-            ToolButton {
+            // a recording's seek bar, title and summary
+            CompactToolButton {
+                visible: root.recording
                 icon.source: root.controller.expanded ? "qrc:/images/arrow_drop_up.svg" :
                                                         "qrc:/images/arrow_drop_down.svg"
-                //text: root.controller.expanded ? "▴" : "▾"
                 onClicked: root.controller.expanded = !root.controller.expanded
-            }
-        }
-        }
-
-        // Narrow "now playing" strip - single-pass marquee, since the
-        // static title Label that used to live in controlsRow is gone
-        // (superseded by this: the one place title/summary show now,
-        // whether live or fixed media). Hidden while expanded, since the
-        // RowLayout below already shows the summary in full there.
-        Item {
-            id: nowPlayingRow
-            Layout.fillWidth: true
-            height: nowPlayingLabel.implicitHeight
-            clip: true
-            visible: !root.controller.expanded && nowPlayingRow.scrollText !== ""
-
-            readonly property string scrollText: {
-                const t = root.controller.displayTitle;
-                const s = root.controller.displaySummary;
-                return t && s ? (t + "   -   " + s) : (t || s || "");
-            }
-
-            Label {
-                id: nowPlayingLabel
-                text: nowPlayingRow.scrollText
-                font.pointSize: 8
-
-                readonly property bool needsScroll: implicitWidth > nowPlayingRow.width
-
-                // Plain SequentialAnimation with an explicit target/property
-                // (started/stopped imperatively below), not "SequentialAnimation
-                // on x": the latter permanently destroys any declarative
-                // binding on x the first time it actually runs (QML: writing
-                // to a property, including via an animation, removes its
-                // binding - it does not come back once the animation stops).
-                // That meant a later short/empty title got stuck wherever
-                // the animation last left x (often off-screen), looking
-                // like the row "didn't clear" even though `text` itself had
-                // updated correctly.
-                SequentialAnimation {
-                    id: scrollAnim
-                    loops: Animation.Infinite
-                    NumberAnimation {
-                        target: nowPlayingLabel
-                        property: "x"
-                        from: nowPlayingRow.width
-                        to: -nowPlayingLabel.implicitWidth
-                        duration: Math.max(12000, nowPlayingLabel.implicitWidth * 30)
-                    }
-                    PauseAnimation { duration: 800 }
-                }
-
-                function _restartScroll() {
-                    if (nowPlayingRow.visible && needsScroll) {
-                        nowPlayingLabel.x = nowPlayingRow.width;
-                        scrollAnim.restart();
-                    } else {
-                        scrollAnim.stop();
-                        nowPlayingLabel.x = 0;
-                    }
-                }
-
-                onTextChanged: nowPlayingLabel._restartScroll()
-                onNeedsScrollChanged: nowPlayingLabel._restartScroll()
-                Component.onCompleted: nowPlayingLabel._restartScroll()
-
-                Connections {
-                    target: nowPlayingRow
-                    function onVisibleChanged() { nowPlayingLabel._restartScroll(); }
-                }
             }
         }
 
@@ -290,13 +204,12 @@ Item {
 
             Layout.fillWidth: true
             spacing: 4
-            visible: root.controller.expanded
+            visible: root.controller.expanded && root.recording
 
             RowLayout {
                 Layout.fillWidth: true
                 Layout.rightMargin: 16
                 spacing: 8
-                visible: !root.controller.isLive
 
                 Label { text: root.formatTime(root.controller.player.position) }
 
