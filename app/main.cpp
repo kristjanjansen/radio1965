@@ -71,11 +71,17 @@ int main(int argc, char *argv[])
         "org/eccm/radio65/PushMessagingService", "subscribeToTopic",
         "(Ljava/lang/String;)V",
         QJniObject::fromString("radio65_event").object<jstring>());
+    // v2in's own notifications (https://v2in.stream: a live show, an air-raid alert in Kyiv, the all clear)
+    QJniObject::callStaticMethod<void>(
+        "org/eccm/radio65/PushMessagingService", "subscribeToTopic",
+        "(Ljava/lang/String;)V",
+        QJniObject::fromString("v2in_notification").object<jstring>());
 #endif
 
 #if defined(Q_OS_IOS) && defined(RADIO65_ENABLE_PUSH)
     iosPushInit();
     iosPushSubscribeToTopic("radio65_event");
+    iosPushSubscribeToTopic("v2in_notification");   // v2in's own notifications (https://v2in.stream)
     // Baseline route for a fresh launch - .playback always defaults to the
     // loudspeaker, unlike .playAndRecord (only entered while broadcasting,
     // see IcecastBroadcaster::startBroadcast()/teardown()), which otherwise
