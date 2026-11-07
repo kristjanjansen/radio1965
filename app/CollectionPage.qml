@@ -15,6 +15,8 @@ Page {
     required property StackView navigationStack
     required property string serverBaseUrl
     required property PlaybackController controller
+    // Main.qml's app.gap: the page's edges and the space between its parts
+    required property int gap
 
     property string groupMode: "month"
     property bool searchVisible: false
@@ -70,7 +72,8 @@ Page {
             events: root.events,
             navigationStack: root.navigationStack,
             serverBaseUrl: root.serverBaseUrl,
-            controller: root.controller
+            controller: root.controller,
+            gap: root.gap
         });
     }
 
@@ -96,8 +99,8 @@ Page {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 8
+        anchors.margins: root.gap
+        spacing: root.gap
 
         RowLayout {
             Layout.fillWidth: true

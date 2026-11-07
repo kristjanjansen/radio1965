@@ -23,6 +23,12 @@ ApplicationWindow {
 
     property color backgroundEndColor: "#245a28"   // primary container — deep green
 
+    // The space between things, one value for the whole app: the gap between
+    // the now-playing bar's controls (PlayerBar.qml), and the views' edges,
+    // the space between their cards and the cards' padding. Passed down to
+    // each view as `gap`.
+    readonly property int gap: 12
+
     // icecastBroadcaster is only registered as a context property on
     // builds with RADIO65_ENABLE_BROADCAST (see app/CMakeLists.txt) -
     // guarded the same way BroadcastPage.qml already does, so this stays
@@ -174,6 +180,9 @@ ApplicationWindow {
                 font.pointSize: 16
                 font.bold: true
                 horizontalAlignment: Qt.AlignHCenter
+                // dimmed during an air-raid alert in Kyiv, as v2in.stream dims its logo
+                opacity: playbackController.v2inNow && playbackController.v2inNow.raid
+                         && playbackController.v2inNow.raid.on ? 0.25 : 1
 
             }
 
@@ -1200,10 +1209,21 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
                 onCurrentIndexChanged: tabBar.currentIndex = currentIndex
 
                 EventListView {
+                    id: homeList
                     eventsModel: newEventsModel;
                     navigationStack: stackView;
                     serverBaseUrl: appSettings.serverUrl;
                     controller: playbackController
+                    gap: app.gap
+                    // v2in's channels as cards over the new events (ChannelList.qml)
+                    listHeader: Component {
+                        ChannelList {
+                            width: homeList.listWidth
+                            controller: playbackController
+                            gap: app.gap
+                            eventCount: homeList.count
+                        }
+                    }
                 }
 
                 CollectionPage {
@@ -1211,6 +1231,7 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
                     navigationStack: stackView;
                     serverBaseUrl: appSettings.serverUrl;
                     controller: playbackController
+                    gap: app.gap
                 }
 
                 BroadcastPage {

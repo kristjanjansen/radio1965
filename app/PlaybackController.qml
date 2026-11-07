@@ -1,6 +1,7 @@
 import QtCore
 import QtQuick
 import QtMultimedia
+import "DummyEvents.js" as DummyEvents
 
 // Global playback state, replacing the per-page MediaPlayer that used to
 // live inside PlayerPage.qml. Instantiated exactly once in Main.qml (id:
@@ -30,10 +31,12 @@ QtObject {
     // live), so a channel added there needs no app release; none until the first answer, which chooses its first
     // channel when none of its channels is chosen. The same answer
     // says what each one plays now (title, by, a date; who is live; silent during an air-raid alert in Kyiv), read
-    // every 10 s while one plays and every minute otherwise, never while the app is in the background. A tapped
-    // livestream card still plays its own url (playMedia), wherever it is.
+    // every 10 s while the app is open, since the Home tab's cards (ChannelList.qml) show it, never while the app is
+    // in the background. A tapped livestream card still plays its own url (playMedia), wherever it is.
     readonly property string v2inBaseUrl: "https://v2in.stream"
     property var v2inNow: null
+    // true after a failed GET /api/now, false after the next good one (ChannelList.qml's error line)
+    property bool v2inError: false
     // A channel of several streamers (its live a list in GET /api/now's channels, e.g. community) is listed as v2in's
     // front page shows it, by name and never by its slots (community-1, ...): mixed and playing (it has a stream), the
     // channel itself, playing its mix; unmixed with someone live, one entry per show, "<name>: <show>", each playing its
@@ -87,30 +90,44 @@ QtObject {
         return line ? c.name + ": " + line : c.name;
     }
     function refreshV2inNow() {
+        // the RADIO65_LAYOUT_PREVIEW build has no backend: DummyEvents.js's answer, so the cards show
+        if (layoutPreview) {
+            root._takeV2inNow(DummyEvents.now);
+            return;
+        }
         const xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function () {
-            if (xhr.readyState !== XMLHttpRequest.DONE || xhr.status !== 200)
+            if (xhr.readyState !== XMLHttpRequest.DONE)
                 return;
-            const before = root._poolEntry(root.selectedChannel, root.v2inNow);
-            try { root.v2inNow = JSON.parse(xhr.responseText); } catch (e) { return; }
-            if (root.channelOptions.indexOf(root.selectedChannel) === -1) {
-                const pool = before ? root.v2inNow.channels.find(p => p.id === before.pool.id && root._isSeveral(p)) : null;
-                if (pool)
-                    root._poolChanged(pool);
-                else
-                    root.selectedChannel = root.channelOptions[0] || "";
+            if (xhr.status !== 200) {
+                root.v2inError = true;
+                return;
             }
-            root.refreshLiveInfo();
+            let now;
+            try { now = JSON.parse(xhr.responseText); } catch (e) { root.v2inError = true; return; }
+            root.v2inError = false;
+            root._takeV2inNow(now);
         };
         xhr.open("GET", root.v2inBaseUrl + "/api/now");
         xhr.send();
+    }
+    function _takeV2inNow(now) {
+        const before = root._poolEntry(root.selectedChannel, root.v2inNow);
+        root.v2inNow = now;
+        if (root.channelOptions.indexOf(root.selectedChannel) === -1) {
+            const pool = before ? root.v2inNow.channels.find(p => p.id === before.pool.id && root._isSeveral(p)) : null;
+            if (pool)
+                root._poolChanged(pool);
+            else
+                root.selectedChannel = root.channelOptions[0] || "";
+        }
+        root.refreshLiveInfo();
     }
     // The chosen entry of a channel of several is gone: its show ended, someone went live on an idle one, or its mix
     // began or ended. Its mix is chosen while it plays, else its first live show, else the channel itself; one that was
     // playing goes on with that, or stops when nothing is left.
     function _poolChanged(pool) {
-        const playing = root.isLive && !root.mediaUrl
-            && (player.playbackState !== MediaPlayer.StoppedState || root.liveStreamOffline || root.loading);
+        const playing = root.playingLive;
         const next = !pool.stream && pool.live.length ? pool.live[0].channel : pool.id;
         root.selectedChannel = next;
         if (!playing)
@@ -120,8 +137,35 @@ QtObject {
         else
             root.start();
     }
+    // A live channel is playing, tuning in or being tuned in again (_retryTimer), not stopped
+    readonly property bool playingLive: root.isLive && !root.mediaUrl
+        && (player.playbackState !== MediaPlayer.StoppedState || root.liveStreamOffline || root.loading)
+    // The card of `channel` (a channel or one of its slots) shows stop while this is true, a busy ring while tuning
+    function isPlayingChannel(channel) {
+        return root.playingLive && root.selectedChannel === channel;
+    }
+    function isTuning(channel) {
+        return root.isPlayingChannel(channel) && root.loading;
+    }
+    // A channel's slots open or folded under its card, kept across launches as v2in.stream keeps them in its
+    // browser; folded by default
+    property Settings channelSettings: Settings {
+        category: "Channels"
+        property string foldOpenJson: "{}"
+    }
+    property var foldOpen: ({})
+    function setFoldOpen(channel, open) {
+        const next = Object.assign({}, root.foldOpen);
+        if (open)
+            next[channel] = true;
+        else
+            delete next[channel];
+        root.foldOpen = next;
+        root.channelSettings.foldOpenJson = JSON.stringify(next);
+    }
+
     property Timer _v2inTimer: Timer {
-        interval: root.isLive && root.isV2inChannel(root.selectedChannel) ? 10000 : 60000
+        interval: 10000
         repeat: true
         triggeredOnStart: true
         running: Qt.application.state === Qt.ApplicationActive
@@ -202,6 +246,7 @@ QtObject {
     Component.onCompleted: {
         root.refreshChannelAvailability();
         root._loadRecentMedia();
+        try { root.foldOpen = JSON.parse(root.channelSettings.foldOpenJson); } catch (e) { root.foldOpen = {}; }
     }
 
     property string mediaUrl: ""

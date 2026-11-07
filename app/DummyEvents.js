@@ -83,3 +83,36 @@ var events = [
         author_name: "Jane Doe"
     }
 ]
+
+// Seeds PlaybackController's v2inNow instead of GET https://v2in.stream/api/now, so the Home tab's channel cards
+// show on a simulator with no backend. The shape is v2in's core/now.mjs: three channels of one (one offline) and
+// community, a channel of several playing its mix of two live shows.
+var now = {
+    generated_at: "2026-11-07T12:00:00.000Z",
+    raid: { on: false, since: null },
+    channels: [
+        { id: "radio1965", name: "radio1965", status: "on air", stream: "https://example.com/stream/radio1965",
+          title: "Üle Heli 1", by: "Tarmo Johannes", date: "2026-10-25", live: null, listeners: 3 },
+        { id: "kcmd", name: "kcmd", status: "offline", stream: "https://example.com/stream/kcmd",
+          title: "", by: "", date: null, live: null, listeners: 0 },
+        { id: "live", name: "live", status: "live", stream: "https://example.com/stream/live",
+          title: "Evening show", by: "Anna", date: null, live: null, listeners: 1 },
+        { id: "community", name: "community", status: "live", mix: true, stream: "https://example.com/stream/community",
+          title: "", by: "", date: null,
+          live: [
+              { channel: "community-1", title: "Kitchen set", artist: "Mari", since: "2026-11-07T11:40:00.000Z",
+                listeners: 0, stream: "https://example.com/stream/community-1" },
+              { channel: "community-3", title: "Window field", artist: "Jaan", since: "2026-11-07T11:52:00.000Z",
+                listeners: 0, stream: "https://example.com/stream/community-3" }
+          ],
+          slots: [
+              { channel: "community-1", live: true, title: "Kitchen set", artist: "Mari", since: "2026-11-07T11:40:00.000Z",
+                listeners: 0, stream: "https://example.com/stream/community-1" },
+              { channel: "community-2", live: false, title: "", artist: "", since: null, listeners: 0, stream: null },
+              { channel: "community-3", live: true, title: "Window field", artist: "Jaan", since: "2026-11-07T11:52:00.000Z",
+                listeners: 0, stream: "https://example.com/stream/community-3" },
+              { channel: "community-4", live: false, title: "", artist: "", since: null, listeners: 0, stream: null }
+          ],
+          listeners: 2 }
+    ]
+}

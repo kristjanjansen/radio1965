@@ -208,6 +208,8 @@ qt_add_qml_module(appradio65
         WebViewPage.qml
         PlaybackController.qml
         PlayerBar.qml
+        ChannelCard.qml
+        ChannelList.qml
         VideoPage.qml
         BroadcastPage.qml
         DummyEvents.js

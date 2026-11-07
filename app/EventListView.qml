@@ -30,15 +30,24 @@ Item {
     // self-referencing-binding footgun navigationStack's own comment
     // documents for "stackView").
     required property PlaybackController controller
+    // Optional: drawn above the events and scrolled with them (the Home tab's channel cards, ChannelList.qml);
+    // Collection sets none
+    property Component listHeader: null
+    // Main.qml's app.gap: the list's edges and the space between its cards
+    required property int gap
+    // the list's width and its events, for the header
+    readonly property real listWidth: listView.width
+    readonly property int count: listView.count
 
     ListView {
         id: listView
         anchors.fill: parent
-        anchors.margins: 8
+        anchors.margins: root.gap
         model: root.eventsModel
-        spacing: 8
+        spacing: root.gap
         clip: true
         boundsBehavior: Flickable.StopAtBounds
+        header: root.listHeader
 
         delegate: EventDelegate {
             // eventId/eventType/title/summary/url/tags/status are populated

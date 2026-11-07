@@ -14,6 +14,8 @@ Page {
     required property StackView navigationStack
     required property string serverBaseUrl
     required property PlaybackController controller
+    // Main.qml's app.gap, as CollectionPage passes it
+    required property int gap
 
     background: Rectangle { color: "transparent" }
 
@@ -61,8 +63,8 @@ Page {
 
     ListView {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 8
+        anchors.margins: root.gap
+        spacing: root.gap
         clip: true
         model: root.results
 
