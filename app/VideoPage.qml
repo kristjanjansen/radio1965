@@ -219,7 +219,7 @@ Page {
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             wrapMode: Text.Wrap
-            color: "white"
+            color: Material.foreground   // the app's text colour, as the raid line over the cards
             text: qsTr("Air-raid alert in Kyiv. The video is off until it ends.")
         }
     }

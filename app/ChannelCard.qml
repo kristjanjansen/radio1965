@@ -256,7 +256,7 @@ Rectangle {
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.Wrap
-                color: "white"
+                color: Material.foreground   // the app's text colour, as the raid line over the cards
                 text: qsTr("Air-raid alert in Kyiv. The video is off until it ends.")
             }
 
@@ -275,13 +275,17 @@ Rectangle {
             Repeater {
                 model: root.mixed && root.playing ? root.controller.mixVideos : []
 
-                delegate: Button {
+                // plain words, no button: the watched one in the full text colour, the others dimmed
+                delegate: Label {
                     required property var modelData
                     text: modelData.title || modelData.artist || qsTr("Live")
-                    flat: true
-                    highlighted: modelData.channel === root.controller.videoChannel
                     font.pointSize: 11
-                    onClicked: root.controller.watch(modelData.channel)
+                    color: Material.foreground
+                    opacity: modelData.channel === root.controller.videoChannel ? 1 : 0.5
+                    topPadding: root.gap / 2
+                    bottomPadding: root.gap / 2
+
+                    TapHandler { onTapped: root.controller.watch(modelData.channel) }
                 }
             }
         }
