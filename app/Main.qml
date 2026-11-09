@@ -1010,6 +1010,11 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
     // plain explicit passing rather than `pragma Singleton` global access.
     PlaybackController {
         id: playbackController
+        // the pocket lock covers the screen: no video is fetched under it
+        videoHeld: lockOverlay.opened
+        // a tap on a channel card's video: full screen, the same muted picture, the sound goes on
+        onVideoPageRequested: stackView.push(Qt.resolvedUrl("VideoPage.qml"),
+                                             { controller: playbackController, liveVideo: true })
     }
 
     // PlayerBar sits above the StackView (not inside feedComponent) so it

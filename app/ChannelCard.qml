@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtMultimedia
 
 // One v2in channel as v2in.stream's Channels tab draws it (web/index.html, render()): play or stop, the name,
 // On air / Silent / Offline, and one line of what plays with its date apart. A channel of several (community)
@@ -185,6 +186,102 @@ Rectangle {
                         font.pointSize: 10
                         opacity: 0.6
                     }
+                }
+            }
+        }
+
+        // The video of what this card plays, in a 16:9 strip, muted: PlaybackController's videoPlayer draws into it
+        // while the card plays and the channel (or the watched member of its mix, or its playing slot) sends video.
+        // During a raid it keeps its place under the raid's line. A tap opens it full screen (VideoPage.qml).
+        Rectangle {
+            id: videoStrip
+            Layout.fillWidth: true
+            Layout.preferredHeight: width * 9 / 16
+            visible: (root.playing || root.held)
+                     && (root.controller.videoUrl !== "" || root.controller.videoRaidCover)
+            color: "black"
+            radius: 4
+            clip: true
+
+            VideoOutput {
+                id: stripOutput
+                anchors.fill: parent
+                fillMode: VideoOutput.PreserveAspectFit
+                visible: !root.controller.videoRaidCover
+            }
+
+            // only the playing card's strip takes the picture, and lets it go when it hides, unless another took it
+            function release() {
+                if (root.controller.videoStripOutput === stripOutput)
+                    root.controller.videoStripOutput = null;
+            }
+            onVisibleChanged: {
+                if (visible)
+                    root.controller.videoStripOutput = stripOutput;
+                else
+                    release();
+            }
+            Component.onDestruction: release()
+
+            // who is on the picture, bottom left over it, as v2in.stream captions its videos
+            Label {
+                anchors.left: parent.left
+                anchors.bottom: parent.bottom
+                anchors.margins: 8
+                width: Math.min(implicitWidth, parent.width - 16)
+                visible: text !== "" && !root.controller.videoRaidCover
+                text: root.controller.videoTitle
+                elide: Text.ElideRight
+                leftPadding: 6
+                rightPadding: 6
+                topPadding: 2
+                bottomPadding: 2
+                color: "white"
+                font.family: root.monoFamily
+                font.pointSize: 10
+                background: Rectangle { radius: 4; color: "#99000000" }
+            }
+
+            BusyIndicator {
+                anchors.centerIn: parent
+                running: videoStrip.visible && !root.controller.videoRaidCover
+                         && root.controller.videoPlayer.playbackState !== MediaPlayer.PlayingState
+                visible: running
+            }
+
+            Label {
+                anchors.fill: parent
+                anchors.margins: root.gap
+                visible: root.controller.videoRaidCover
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                wrapMode: Text.Wrap
+                color: "white"
+                text: qsTr("Air-raid alert in Kyiv. The video is off until it ends.")
+            }
+
+            TapHandler {
+                enabled: !root.controller.videoRaidCover
+                onTapped: root.controller.videoPageRequested()
+            }
+        }
+
+        // a mix's members who send video: one is watched at a time, a tap watches another, the sound stays the mix
+        Flow {
+            Layout.fillWidth: true
+            spacing: root.gap / 2
+            visible: root.mixed && root.playing && root.controller.mixVideos.length > 1
+
+            Repeater {
+                model: root.mixed && root.playing ? root.controller.mixVideos : []
+
+                delegate: Button {
+                    required property var modelData
+                    text: modelData.title || modelData.artist || qsTr("Live")
+                    flat: true
+                    highlighted: modelData.channel === root.controller.videoChannel
+                    font.pointSize: 11
+                    onClicked: root.controller.watch(modelData.channel)
                 }
             }
         }

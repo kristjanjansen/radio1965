@@ -16,15 +16,8 @@ import "DummyEvents.js" as DummyEvents
 QtObject {
     id: root
 
-    // Fallback for isLive when no per-event url is set - a tapped
-    // livestream card with a real url (e.g. an Icecast channel, see
-    // app/icecastbroadcaster.cpp) plays that instead, per start().
-    readonly property string liveStreamUrl: "https://live.uuu.ee:4443/hls/stream.m3u8"
-
-    // radio1965's public listen URL - moved off the Icecast box (behind
-    // live.uuu.ee:8001, where status-json.xsl can see it) to this relay, so
-    // its own occupancy can't come from status-json.xsl either - checked
-    // separately below, same as liveStreamUrl/videoStreamLive.
+    // radio1965's public listen URL, on v2in's relay (not an Icecast mount on live.uuu.ee, so status-json.xsl cannot
+    // see it): checked separately below until /api/now has answered.
     readonly property string radio1965StreamUrl: "https://v2in.stream/stream/radio1965"
 
     // The channels are v2in's (https://v2in.stream), as its GET /api/now lists them (today radio1965, kcmd and
@@ -147,6 +140,118 @@ QtObject {
     function isTuning(channel) {
         return root.isPlayingChannel(channel) && root.loading;
     }
+
+    // The video of what plays: /api/now's video (the HLS address, or null) of the channel, or of the slot, that
+    // `player` plays; for a mix, the video of one of its members, the one tapped (watchChannel), else the first with
+    // one. Shown by the playing card (ChannelCard.qml) and VideoPage.qml through videoPlayer below, muted: the sound
+    // is always `player`'s, the Icecast stream. Empty when nothing plays, during a raid (the server refuses the video
+    // then too) and when nobody sends any.
+    readonly property bool raidOn: !!root.v2inNow && !!root.v2inNow.raid && root.v2inNow.raid.on
+    property string watchChannel: ""
+    // the members of the playing mix that send video, { channel, title, artist, video }, for the card to choose from
+    readonly property var mixVideos: {
+        const c = root.playingLive ? root.v2inChannel(root.selectedChannel) : null;
+        return c && c.pool && Array.isArray(c.live) ? c.live.filter(l => !!l.video) : [];
+    }
+    readonly property var _videoEntry: {
+        if (!root.playingLive || root.raidOn)
+            return null;
+        if (root.mixVideos.length)
+            return root.mixVideos.find(l => l.channel === root.watchChannel) || root.mixVideos[0];
+        const c = root.v2inChannel(root.selectedChannel);
+        if (!c)
+            return null;
+        // a slot of a channel of several carries its live entry, a channel of one its own video
+        const v = c.pool ? (c.live && !Array.isArray(c.live) ? c.live.video : null) : c.video;
+        return v ? { channel: root.selectedChannel, title: [c.by, c.title].filter(Boolean).join(" - "), video: v } : null;
+    }
+    readonly property string videoUrl: root._videoEntry ? root._videoEntry.video : ""
+    readonly property string videoChannel: root._videoEntry ? root._videoEntry.channel : ""
+    readonly property string videoTitle: !root._videoEntry ? ""
+        : root._videoEntry.artist !== undefined
+          ? [root._videoEntry.artist, root._videoEntry.title].filter(Boolean).join(" - ") : root._videoEntry.title
+    function watch(channel) {
+        root.watchChannel = channel;
+    }
+    // The playing channel showed video when a raid began: its card and VideoPage keep the picture's place, covered
+    // with the raid's line, until the raid ends and the video comes back (or the channel stops)
+    property string _videoSeenChannel: ""
+    onVideoUrlChanged: root._videoSeenChannel = root.videoUrl ? root.selectedChannel
+                                              : root.raidOn ? root._videoSeenChannel : ""
+    onPlayingLiveChanged: if (!root.playingLive) root._videoSeenChannel = ""
+    onSelectedChannelChanged: {
+        root._videoSeenChannel = "";
+        root.watchChannel = "";
+    }
+    readonly property bool videoRaidCover: root.raidOn && root.playingLive && root._videoSeenChannel !== ""
+        && root._videoSeenChannel === root.selectedChannel
+    // No video is fetched while the app is hidden or suspended (the screen locked or off, another app in front) or
+    // Main.qml's pocket lock covers it, so a listener who is not looking downloads none; it loads again when they look.
+    // Inactive alone (a desktop window without focus, iOS's control centre pulled down) keeps it.
+    property bool videoHeld: false
+    readonly property bool _appShown: Qt.application.state !== Qt.ApplicationSuspended
+                                      && Qt.application.state !== Qt.ApplicationHidden
+    readonly property string videoSource: root._appShown && !root.videoHeld ? root.videoUrl : ""
+    // A changed address (its s= changes when the sender reconnects) loads again; an empty one stops, a second later
+    // unless it is a raid: `player` passes through stopped for a moment when it tunes in again (_retryTimer), and the
+    // picture should not start over for that
+    property string _videoLoaded: ""
+    onVideoSourceChanged: {
+        if (root.videoSource === root._videoLoaded)
+            root._videoStopTimer.stop();
+        else if (!root.videoSource && !root.raidOn)
+            root._videoStopTimer.restart();
+        else
+            root._loadVideo();
+    }
+    property Timer _videoStopTimer: Timer {
+        interval: 1000
+        onTriggered: if (!root.videoSource) root._loadVideo()
+    }
+    function _loadVideo() {
+        root._videoStopTimer.stop();
+        videoPlayer.stop();
+        videoPlayer.source = "";
+        root.videoRetrying = false;
+        root._videoLoaded = root.videoSource;
+        if (!root.videoSource)
+            return;
+        videoPlayer.source = root.videoSource;
+        videoPlayer.play();
+    }
+    // Where the picture is drawn: VideoPage's output while it is open, else the playing card's strip
+    property var videoStripOutput: null
+    property var videoPageOutput: null
+    readonly property var videoTarget: root.videoPageOutput || root.videoStripOutput
+    onVideoTargetChanged: {
+        videoPlayer.videoOutput = root.videoTarget;
+        // QtMultimedia (6.12, FFmpeg backend) draws nothing into an output set while it plays (MEASURED on macOS):
+        // started again into the new one, from the live edge as before
+        if (root.videoTarget && videoPlayer.playbackState !== MediaPlayer.StoppedState) {
+            videoPlayer.stop();
+            videoPlayer.play();
+        }
+    }
+    // A tap on the card's picture: Main.qml pushes VideoPage.qml for it
+    signal videoPageRequested()
+
+    // The second player, the picture only: no AudioOutput, so it plays no sound, while `player` keeps the Icecast
+    // stream. Its address's first answer is a 302 to ?cookieCheck=1, which the FFmpeg backend follows.
+    property bool videoRetrying: false
+    property MediaPlayer videoPlayer: MediaPlayer {
+        id: videoPlayer
+        // the HLS playlist not there yet, or gone for a moment (a reconnect before /api/now says so): tried again
+        onErrorOccurred: (error, errorString) => {
+            console.log("video:", errorString);
+            root.videoRetrying = !!root.videoSource;
+        }
+        onMediaStatusChanged: if (mediaStatus === MediaPlayer.EndOfMedia && root.videoSource) root.videoRetrying = true
+    }
+    property Timer _videoRetryTimer: Timer {
+        interval: 5000
+        running: root.videoRetrying && root.videoSource !== ""
+        onTriggered: root._loadVideo()
+    }
     // A channel's slots open or folded under its card, kept across launches as v2in.stream keeps them in its
     // browser; folded by default
     property Settings channelSettings: Settings {
@@ -181,12 +286,7 @@ QtObject {
     // defensive pattern BroadcastPage.qml already uses.
     readonly property bool occupancyAvailable: typeof icecastBroadcaster !== "undefined"
     property var occupiedChannels: []
-    // "video" (the main HLS stream) isn't an Icecast mountpoint, so its
-    // occupancy can't come from status-json.xsl - checked separately below
-    // via a plain GET against liveStreamUrl itself.
-    property bool videoStreamLive: false
-    // Same reasoning as videoStreamLive, now that radio1965 is no longer an
-    // Icecast mountpoint reachable via status-json.xsl either.
+    // radio1965 is no longer an Icecast mountpoint reachable via status-json.xsl: checked with a plain GET
     property bool radio1965StreamLive: false
 
     function _checkStreamLive(url, callback) {
@@ -223,7 +323,6 @@ QtObject {
         if (root.occupancyAvailable)
             icecastBroadcaster.refreshOccupiedChannels();
 
-        root._checkStreamLive(root.liveStreamUrl, function (live) { root.videoStreamLive = live; });
         root._checkStreamLive(root.radio1965StreamUrl, function (live) { root.radio1965StreamLive = live; });
     }
 
@@ -231,8 +330,6 @@ QtObject {
         const c = root.v2inChannel(channel);
         if (c)
             return c.status !== "offline";
-        if (channel === "video")
-            return root.videoStreamLive;
         if (channel === "radio1965")
             return root.radio1965StreamLive;
         return root.occupiedChannels.indexOf(channel) !== -1;

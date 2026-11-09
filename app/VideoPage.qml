@@ -5,10 +5,16 @@ import QtMultimedia
 import QtQuick.Window
 
 // Pushed onto Main.qml's StackView (with the shared PlaybackController
-// instance passed as an initial property) only while the currently-playing
-// media - either a video file or, hypothetically, a video stream - actually
-// has a video track. Popping this page (the back button) does not stop
-// playback, it just stops rendering it.
+// instance passed as an initial property) while the currently-playing
+// media file has a video track, or with liveVideo true when a channel card's
+// video strip is tapped (ChannelCard.qml).
+//
+// liveVideo: the picture is PlaybackController's second, muted videoPlayer
+// (a channel's /api/now video), drawn here instead of in the card while this
+// page is open; the sound stays the channel's Icecast stream. Closing the
+// page gives the picture back to the card and leaves the sound playing; the
+// page closes by itself when the video ends. During a raid the picture is
+// covered with the raid's line until the video comes back.
 //
 // Windowed mode: playback is controlled by the always-visible PlayerBar
 // strip above the StackView, same as before - the top bar here is just
@@ -27,6 +33,16 @@ import QtQuick.Window
 Page {
     id: root
     required property PlaybackController controller
+    property bool liveVideo: false
+    // the channel's video ended (not a raid, which keeps the page under its cover): closed a moment later, so the
+    // sound tuning in again (its player passes through stopped) does not close it
+    readonly property bool liveVideoGone: root.liveVideo && root.controller.videoUrl === ""
+                                          && !root.controller.videoRaidCover
+    Timer {
+        interval: 1500
+        running: root.liveVideoGone
+        onTriggered: root.closeVideoPage()
+    }
 
     readonly property bool fullscreenActive: root.Window.window && root.Window.window.visibility === Window.FullScreen
     property bool controlsVisible: true
@@ -65,7 +81,9 @@ Page {
     function closeVideoPage() {
         if (root.fullscreenActive)
             root.toggleFullscreen();
-        root.controller.stop();
+        // a channel's video goes back to its card, the sound goes on
+        if (!root.liveVideo)
+            root.controller.stop();
         root.StackView.view.pop();
     }
 
@@ -120,6 +138,7 @@ Page {
 
     Rectangle {
         id: topBar
+        z: 2 // over the raid's cover below, so back still works
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
@@ -138,7 +157,7 @@ Page {
             }
 
             Label {
-                text: root.controller.displayTitle
+                text: root.liveVideo ? root.controller.videoTitle : root.controller.displayTitle
                 color: root.fullscreenActive ? "white" : Material.foreground
                 elide: Text.ElideRight
                 Layout.fillWidth: true
@@ -160,7 +179,8 @@ Page {
         color: "#99000000"
         // Windowed mode still has PlayerBar for this - only shown here
         // once PlayerBar is hidden for fullscreen (see Main.qml).
-        visible: root.fullscreenActive && root.controlsVisible
+        // a live video has nothing to seek: the PlayerBar's stop, out of fullscreen, stops it
+        visible: root.fullscreenActive && root.controlsVisible && !root.liveVideo
 
         RowLayout {
             id: bottomBarRow
@@ -187,6 +207,40 @@ Page {
         }
     }
 
-    Component.onCompleted: root.controller.player.videoOutput = videoOutput
-    Component.onDestruction: root.controller.player.videoOutput = null
+    // during a raid the server refuses the video: its place covered with the raid's line, no retry until it ends
+    Rectangle {
+        anchors.fill: parent
+        visible: root.liveVideo && root.controller.videoRaidCover
+        color: "black"
+
+        Label {
+            anchors.fill: parent
+            anchors.margins: 24
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            wrapMode: Text.Wrap
+            color: "white"
+            text: qsTr("Air-raid alert in Kyiv. The video is off until it ends.")
+        }
+    }
+
+    BusyIndicator {
+        anchors.centerIn: parent
+        running: root.liveVideo && !root.controller.videoRaidCover
+                 && root.controller.videoPlayer.playbackState !== MediaPlayer.PlayingState
+        visible: running
+    }
+
+    Component.onCompleted: {
+        if (root.liveVideo)
+            root.controller.videoPageOutput = videoOutput;
+        else
+            root.controller.player.videoOutput = videoOutput;
+    }
+    Component.onDestruction: {
+        if (root.liveVideo)
+            root.controller.videoPageOutput = null;
+        else
+            root.controller.player.videoOutput = null;
+    }
 }
