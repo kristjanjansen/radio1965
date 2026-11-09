@@ -257,7 +257,7 @@ Rectangle {
                 verticalAlignment: Text.AlignVCenter
                 wrapMode: Text.Wrap
                 color: Material.foreground   // the app's text colour, as the raid line over the cards
-                text: qsTr("Air-raid alert in Kyiv. The video is off until it ends.")
+                text: qsTr("Air-raid alert in Kyiv.\nThe video is off until it ends.")
             }
 
             TapHandler {
