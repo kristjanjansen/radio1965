@@ -131,8 +131,10 @@ QtObject {
             root.start();
     }
     // A live channel is playing, tuning in or being tuned in again (_retryTimer), not stopped
+    // (or stopped for VideoPage's video, videoHoldsChannel)
     readonly property bool playingLive: root.isLive && !root.mediaUrl
-        && (player.playbackState !== MediaPlayer.StoppedState || root.liveStreamOffline || root.loading)
+        && (player.playbackState !== MediaPlayer.StoppedState || root.liveStreamOffline || root.loading
+            || root.videoHoldsChannel)
     // The card of `channel` (a channel or one of its slots) shows stop while this is true, a busy ring while tuning
     function isPlayingChannel(channel) {
         return root.playingLive && root.selectedChannel === channel;
@@ -142,13 +144,14 @@ QtObject {
     }
 
     // The video of what plays: /api/now's video (the HLS address, or null) of the channel, or of the slot, that
-    // `player` plays; for a mix, the video of one of its members, the one tapped (watchChannel), else the first with
-    // one. Shown by the playing card (ChannelCard.qml) and VideoPage.qml through videoPlayer below, muted: the sound
-    // is always `player`'s, the Icecast stream. Empty when nothing plays, during a raid (the server refuses the video
-    // then too) and when nobody sends any.
+    // `player` plays; for a mix, the video of one of its members, the one chosen on VideoPage (watchChannel), else the
+    // first with one. The playing card shows a video button while there is one (ChannelCard.qml); its tap opens
+    // VideoPage.qml, which plays it through videoPlayer below with its own sound while `player` (the Icecast stream)
+    // stops, so picture and sound come from one stream. Empty when nothing plays, during a raid (the server refuses the
+    // video then too) and when nobody sends any.
     readonly property bool raidOn: !!root.v2inNow && !!root.v2inNow.raid && root.v2inNow.raid.on
     property string watchChannel: ""
-    // the members of the playing mix that send video, { channel, title, artist, video }, for the card to choose from
+    // the members of the playing mix that send video, { channel, title, artist, video }, for VideoPage to choose from
     readonly property var mixVideos: {
         const c = root.playingLive ? root.v2inChannel(root.selectedChannel) : null;
         return c && c.pool && Array.isArray(c.live) ? c.live.filter(l => !!l.video) : [];
@@ -173,8 +176,8 @@ QtObject {
     function watch(channel) {
         root.watchChannel = channel;
     }
-    // The playing channel showed video when a raid began: its card and VideoPage keep the picture's place, covered
-    // with the raid's line, until the raid ends and the video comes back (or the channel stops)
+    // The playing channel showed video when a raid began: VideoPage keeps the picture's place, covered with the
+    // raid's line, until the raid ends and the video comes back (or the channel stops)
     property string _videoSeenChannel: ""
     onVideoUrlChanged: root._videoSeenChannel = root.videoUrl ? root.selectedChannel
                                               : root.raidOn ? root._videoSeenChannel : ""
@@ -185,66 +188,84 @@ QtObject {
     }
     readonly property bool videoRaidCover: root.raidOn && root.playingLive && root._videoSeenChannel !== ""
         && root._videoSeenChannel === root.selectedChannel
+
+    // VideoPage (liveVideo) is open: its VideoOutput, set by showVideo() and cleared by hideVideo()
+    property var videoPageOutput: null
+    readonly property bool videoOpen: root.videoPageOutput !== null
+    // VideoPage was opened from a playing channel that has not been stopped since: the channel counts as playing
+    // (playingLive) while `player` is stopped for the video, and Back tunes it in again
+    property bool videoHoldsChannel: false
+    // A tap on the card's video button: Main.qml pushes VideoPage.qml for it
+    signal videoPageRequested()
+    function showVideo(output) {
+        root.videoHoldsChannel = root.playingLive;
+        root.videoPageOutput = output;
+    }
+    function hideVideo(output) {
+        if (root.videoPageOutput !== output)
+            return;
+        // `player` was stopped for the video: tuned in again, the channel playing throughout
+        const resume = root._icecastHeld;
+        if (resume)
+            root.loading = true;
+        root.videoHoldsChannel = false;
+        root.videoPageOutput = null;
+        if (resume)
+            root.start();
+    }
+
     // No video is fetched while the app is hidden or suspended (the screen locked or off, another app in front) or
     // Main.qml's pocket lock covers it, so a listener who is not looking downloads none; it loads again when they look.
     // Inactive alone (a desktop window without focus, iOS's control centre pulled down) keeps it.
     property bool videoHeld: false
     readonly property bool _appShown: Qt.application.state !== Qt.ApplicationSuspended
                                       && Qt.application.state !== Qt.ApplicationHidden
-    readonly property string videoSource: root._appShown && !root.videoHeld ? root.videoUrl : ""
-    // A changed address (its s= changes when the sender reconnects) loads again; an empty one stops, a second later
-    // unless it is a raid: `player` passes through stopped for a moment when it tunes in again (_retryTimer), and the
-    // picture should not start over for that
+    readonly property string videoSource: root.videoOpen && root.videoHoldsChannel && root._appShown && !root.videoHeld
+                                          ? root.videoUrl : ""
+    // The sound comes from one stream: the video's while it plays, else the channel's Icecast stream. So `player`
+    // stops when the video loads and tunes in again whenever the video goes (a raid, the pocket lock, the app hidden,
+    // the video ended), even before VideoPage closes.
+    readonly property bool _icecastHeld: root.videoHoldsChannel && root.videoSource !== ""
+    on_IcecastHeldChanged: {
+        if (root._icecastHeld) {
+            player.stop();
+            root.loading = false;
+            root.liveStreamOffline = false;
+            root.errorMessage = "";
+        } else if (root.videoHoldsChannel) {
+            root.start();
+        }
+    }
+    // A changed address (its s= changes when the sender reconnects) loads again; an empty one stops
     property string _videoLoaded: ""
-    onVideoSourceChanged: {
-        if (root.videoSource === root._videoLoaded)
-            root._videoStopTimer.stop();
-        else if (!root.videoSource && !root.raidOn)
-            root._videoStopTimer.restart();
-        else
-            root._loadVideo();
-    }
-    property Timer _videoStopTimer: Timer {
-        interval: 1000
-        onTriggered: if (!root.videoSource) root._loadVideo()
-    }
+    onVideoSourceChanged: if (root.videoSource !== root._videoLoaded) root._loadVideo()
     function _loadVideo() {
-        root._videoStopTimer.stop();
         videoPlayer.stop();
         videoPlayer.source = "";
         root.videoRetrying = false;
         root._videoLoaded = root.videoSource;
         if (!root.videoSource)
             return;
+        // the output is set before play: QtMultimedia (6.12, FFmpeg backend) draws nothing into one set while it
+        // plays (MEASURED on macOS)
+        videoPlayer.videoOutput = root.videoPageOutput;
         videoPlayer.source = root.videoSource;
         videoPlayer.play();
     }
-    // Where the picture is drawn: VideoPage's output while it is open, else the playing card's strip
-    property var videoStripOutput: null
-    property var videoPageOutput: null
-    readonly property var videoTarget: root.videoPageOutput || root.videoStripOutput
-    onVideoTargetChanged: {
-        videoPlayer.videoOutput = root.videoTarget;
-        // QtMultimedia (6.12, FFmpeg backend) draws nothing into an output set while it plays (MEASURED on macOS):
-        // started again into the new one, from the live edge as before
-        if (root.videoTarget && videoPlayer.playbackState !== MediaPlayer.StoppedState) {
-            videoPlayer.stop();
-            videoPlayer.play();
-        }
-    }
-    // A tap on the card's picture: Main.qml pushes VideoPage.qml for it
 
-    // The second player, the picture only: no AudioOutput, so it plays no sound, while `player` keeps the Icecast
-    // stream. Its address's first answer is a 302 to ?cookieCheck=1, which the FFmpeg backend follows.
+    // The second player, VideoPage's: picture and sound of the video. Its address's first answer is a 302 to
+    // ?cookieCheck=1, which the FFmpeg backend follows.
     property bool videoRetrying: false
     property MediaPlayer videoPlayer: MediaPlayer {
         id: videoPlayer
+        audioOutput: AudioOutput { volume: root.playbackSettings.volume }
         // the HLS playlist not there yet, or gone for a moment (a reconnect before /api/now says so): tried again
         onErrorOccurred: (error, errorString) => {
             console.log("video:", errorString);
             root.videoRetrying = !!root.videoSource;
         }
         onMediaStatusChanged: if (mediaStatus === MediaPlayer.EndOfMedia && root.videoSource) root.videoRetrying = true
+        onPlaybackStateChanged: root._keepScreenOn()
     }
     property Timer _videoRetryTimer: Timer {
         interval: 5000
@@ -385,6 +406,7 @@ QtObject {
 
     function setVolume(volume) {
         player.audioOutput.volume = volume;
+        videoPlayer.audioOutput.volume = volume;
         playbackSettings.volume = volume;
     }
 
@@ -508,6 +530,11 @@ QtObject {
     }
 
     function start() {
+        // VideoPage plays the channel's video with its sound: the channel stays chosen, `player` stays stopped
+        if (root._icecastHeld && root.isLive && !root.mediaUrl) {
+            root.refreshLiveInfo();
+            return;
+        }
         // a channel of several with nothing to play (nobody live, no mix): its line says so
         const idle = root.isLive && !root.mediaUrl ? root.v2inChannel(root.selectedChannel) : null;
         if (idle && idle.pool && !idle.live) {
@@ -556,6 +583,8 @@ QtObject {
     // hides once stopped) - use backToChannels() for an explicit return to
     // radio mode.
     function stop() {
+        // VideoPage's video stops too (playingLive goes false, so its address goes) and its page closes
+        root.videoHoldsChannel = false;
         player.stop();
         root.errorMessage = "";
         root.liveStreamOffline = false;
@@ -577,6 +606,11 @@ QtObject {
         root.liveStreamOffline = false;
     }
 
+    function _keepScreenOn() {
+        screenKeeper.setEnabled(player.playbackState === MediaPlayer.PlayingState
+                                || videoPlayer.playbackState === MediaPlayer.PlayingState);
+    }
+
     property MediaPlayer player: MediaPlayer {
         id: player
         audioOutput: AudioOutput { volume: root.playbackSettings.volume }
@@ -595,7 +629,7 @@ QtObject {
         // Keeps the display from timing out while something is actively
         // playing - the single biggest cause of accidental backgrounding
         // for a radio app. No-op on desktop (screenkeeper_noop.cpp).
-        onPlaybackStateChanged: screenKeeper.setEnabled(playbackState === MediaPlayer.PlayingState)
+        onPlaybackStateChanged: root._keepScreenOn()
 
         onErrorOccurred: (error, errorString) => {
             root.loading = false;

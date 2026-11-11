@@ -19,11 +19,12 @@ Item {
     readonly property int iconInset: 5
     implicitHeight: contentColumn.implicitHeight + root.gap
 
-    // Something plays, is tuning in, is being tuned in again, is paused, or failed (its error shows); stop is
+    // Something plays, is tuning in, is being tuned in again, is paused, failed (its error shows), or stopped for
+    // VideoPage's video of the channel (videoHoldsChannel); stop is
     // greyed and the text says "Nothing playing" otherwise
     readonly property bool active: root.controller.player.playbackState !== MediaPlayer.StoppedState
                                    || root.controller.loading || root.controller.liveStreamOffline
-                                   || root.controller.errorMessage !== ""
+                                   || root.controller.errorMessage !== "" || root.controller.videoHoldsChannel
     readonly property bool recording: !root.controller.isLive && root.active
     // the name and what plays: larger than the old ticker's 8 pt since it scrolls anyway, a little under the
     // cards' 16 pt names

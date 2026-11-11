@@ -7,14 +7,14 @@ import QtQuick.Window
 // Pushed onto Main.qml's StackView (with the shared PlaybackController
 // instance passed as an initial property) while the currently-playing
 // media file has a video track, or with liveVideo true when a channel card's
-// video strip is tapped (ChannelCard.qml).
+// video button is tapped (ChannelCard.qml).
 //
-// liveVideo: the picture is PlaybackController's second, muted videoPlayer
-// (a channel's /api/now video), drawn here instead of in the card while this
-// page is open; the sound stays the channel's Icecast stream. Closing the
-// page gives the picture back to the card and leaves the sound playing; the
-// page closes by itself when the video ends. During a raid the picture is
-// covered with the raid's line until the video comes back.
+// liveVideo: PlaybackController's videoPlayer plays the channel's /api/now
+// video here, picture and sound from the one HLS stream, while the channel's
+// Icecast stream stops. Back stops the video and tunes the channel in again;
+// the page closes by itself when the video ends. A mix shows one member's
+// video, its members' names along the bottom switch to another. During a raid
+// the picture is covered with the raid's line until the video comes back.
 //
 // Windowed mode: playback is controlled by the always-visible PlayerBar
 // strip above the StackView, same as before - the top bar here is just
@@ -81,8 +81,10 @@ Page {
     function closeVideoPage() {
         if (root.fullscreenActive)
             root.toggleFullscreen();
-        // a channel's video goes back to its card, the sound goes on
-        if (!root.liveVideo)
+        // a channel's video stops and its Icecast stream plays again
+        if (root.liveVideo)
+            root.controller.hideVideo(videoOutput);
+        else
             root.controller.stop();
         root.StackView.view.pop();
     }
@@ -207,6 +209,46 @@ Page {
         }
     }
 
+    // a mix's members who send video, along the bottom: one is watched at a time, picture and sound; a tap on
+    // another name switches to it. Plain words, the watched one in the full text colour, the others dimmed.
+    Rectangle {
+        id: membersBar
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: membersFlow.implicitHeight + 12
+        color: "#99000000"
+        visible: root.liveVideo && root.controller.mixVideos.length > 1 && !root.controller.videoRaidCover
+                 && (!root.fullscreenActive || root.controlsVisible)
+
+        Flow {
+            id: membersFlow
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            spacing: 16
+
+            Repeater {
+                model: root.liveVideo ? root.controller.mixVideos : []
+
+                delegate: Label {
+                    id: memberLabel
+                    required property var modelData
+                    text: modelData.title || modelData.artist || qsTr("Live")
+                    font.pointSize: 13
+                    color: "white"
+                    opacity: modelData.channel === root.controller.videoChannel ? 1 : 0.5
+                    topPadding: 8
+                    bottomPadding: 8
+
+                    TapHandler { onTapped: root.controller.watch(memberLabel.modelData.channel) }
+                }
+            }
+        }
+    }
+
     // during a raid the server refuses the video: its place covered with the raid's line, no retry until it ends
     Rectangle {
         anchors.fill: parent
@@ -233,13 +275,14 @@ Page {
 
     Component.onCompleted: {
         if (root.liveVideo)
-            root.controller.videoPageOutput = videoOutput;
+            root.controller.showVideo(videoOutput);
         else
             root.controller.player.videoOutput = videoOutput;
     }
+    // a page popped any other way lets the video go too (a no-op after closeVideoPage)
     Component.onDestruction: {
         if (root.liveVideo)
-            root.controller.videoPageOutput = null;
+            root.controller.hideVideo(videoOutput);
         else
             root.controller.player.videoOutput = null;
     }

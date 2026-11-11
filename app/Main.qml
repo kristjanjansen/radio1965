@@ -1012,6 +1012,9 @@ VÄIN is an app created for the 'Radio Tallinn 1965' project, run by the Estonia
         id: playbackController
         // the pocket lock covers the screen: no video is fetched under it
         videoHeld: lockOverlay.opened
+        // a tap on the playing card's video button: the video with its own sound, the channel's stream stopped
+        onVideoPageRequested: stackView.push(Qt.resolvedUrl("VideoPage.qml"),
+                                             { controller: playbackController, liveVideo: true })
     }
 
     // PlayerBar sits above the StackView (not inside feedComponent) so it
