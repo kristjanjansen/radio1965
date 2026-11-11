@@ -233,7 +233,6 @@ QtObject {
         }
     }
     // A tap on the card's picture: Main.qml pushes VideoPage.qml for it
-    signal videoPageRequested()
 
     // The second player, the picture only: no AudioOutput, so it plays no sound, while `player` keeps the Icecast
     // stream. Its address's first answer is a 302 to ?cookieCheck=1, which the FFmpeg backend follows.

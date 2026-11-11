@@ -192,7 +192,8 @@ Rectangle {
 
         // The video of what this card plays, in a 16:9 strip, muted: PlaybackController's videoPlayer draws into it
         // while the card plays and the channel (or the watched member of its mix, or its playing slot) sends video.
-        // During a raid it keeps its place under the raid's line. A tap opens it full screen (VideoPage.qml).
+        // During a raid it keeps its place under the raid's line. No full screen: moving the picture restarts the
+        // HLS player from the live edge, which left the page black for seconds.
         Rectangle {
             id: videoStrip
             Layout.fillWidth: true
@@ -260,10 +261,6 @@ Rectangle {
                 text: qsTr("Air-raid alert in Kyiv.\nThe video is off until it ends.")
             }
 
-            TapHandler {
-                enabled: !root.controller.videoRaidCover
-                onTapped: root.controller.videoPageRequested()
-            }
         }
 
         // a mix's members who send video: one is watched at a time, a tap watches another, the sound stays the mix
